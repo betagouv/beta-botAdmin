@@ -1,7 +1,14 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions.js";
 import { config } from "../config.js";
 
-let cachedToken: string | undefined = config.dimail.token || undefined;
+let cachedToken: string | undefined;
+
+// Force a fresh login against /token/ (Basic auth), discarding any cached token.
+// Called at the start of every /emails command so each one re-authenticates
+// instead of reusing a previous (or env-provided) token.
+export async function refreshToken(): Promise<string> {
+  return getToken(true);
+}
 
 async function getToken(forceRefresh = false): Promise<string> {
   if (cachedToken && !forceRefresh) return cachedToken;
@@ -21,6 +28,9 @@ async function getToken(forceRefresh = false): Promise<string> {
   }
   const data = (await res.json()) as { access_token: string };
   cachedToken = data.access_token;
+  console.log(
+    `[dimail] nouveau token obtenu (len=${cachedToken.length}, …${cachedToken.slice(-24)})`,
+  );
   return cachedToken;
 }
 

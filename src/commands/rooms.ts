@@ -370,16 +370,18 @@ async function listRooms(
   client: MatrixClient,
   spaceId: string,
 ): Promise<RoomCmdResult> {
-  const children = await listChildren(client, spaceId);
-  if (children.length === 0) {
-    return { reaction: "📭", message: "📭 Aucun salon dans l'espace géré." };
+  // Only list rooms that actually have a name (skip unnamed / unreadable ones),
+  // and show just the name — no room IDs.
+  const named = (await listChildren(client, spaceId)).filter(
+    (c) => c.name.trim().length > 0,
+  );
+  if (named.length === 0) {
+    return { reaction: "📭", message: "📭 Aucun salon nommé dans l'espace géré." };
   }
-  const lines = children
-    .map((c) => `- **${c.name || "(sans nom)"}** — \`${c.roomId}\``)
-    .join("\n");
+  const lines = named.map((c) => `- **${c.name}**`).join("\n");
   return {
     reaction: "📋",
-    message: `📋 Salons de l'espace géré (${children.length}) :\n${lines}`,
+    message: `📋 Salons de l'espace géré (${named.length}) :\n${lines}`,
   };
 }
 

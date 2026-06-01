@@ -700,6 +700,7 @@ export class MatrixConnector {
       msgtype?: string;
       body?: string;
       formatted_body?: string;
+      ["m.mentions"]?: { user_ids?: string[] };
     };
     if (content?.msgtype !== "m.text") return;
 
@@ -709,11 +710,15 @@ export class MatrixConnector {
     const localPart = this.ownUserId
       ? (this.ownUserId.replace(/@/, "").split(":")[0] ?? "")
       : "";
+    // A genuine mention = a real "pill": the bot's user ID appears either in the
+    // HTML formatted_body (matrix.to link) or in the m.mentions.user_ids list.
+    // We deliberately do NOT match the plain-text display name, otherwise typing
+    // the bot's name by hand (no pill) would trigger commands — the plain `body`
+    // of a real pill is identical to hand-typed text, so it can't be trusted.
+    const mentionUserIds = content["m.mentions"]?.user_ids ?? [];
     const isMentioned = this.ownUserId
       ? formattedBody.includes(this.ownUserId) ||
-        body.toLowerCase().includes(this.ownUserId.toLowerCase()) ||
-        (localPart !== "" &&
-          body.toLowerCase().includes(localPart.toLowerCase()))
+        mentionUserIds.includes(this.ownUserId)
       : false;
 
     const relates = (event.content as Record<string, unknown>)?.[
@@ -747,10 +752,11 @@ export class MatrixConnector {
 
     // Slash command rule:
     // - In DM: any leading "/" counts.
-    // - In a room: must be @-mentioned at the START, and "/" must be the first char right after the mention.
+    // - In a room: must be a REAL @mention of the bot (pill), and "/" must be the
+    //   first char right after the stripped mention text.
     const isSlashCommand = isDM
       ? trimmedBody.startsWith("/")
-      : mentionAtStart && afterMention.startsWith("/");
+      : isMentioned && mentionAtStart && afterMention.startsWith("/");
 
     console.log(
       `[Matrix] Message from ${sender} in ${roomId} isDM=${isDM} isMentioned=${isMentioned} mentionAtStart=${mentionAtStart} isSlashCommand=${isSlashCommand} body=${JSON.stringify(body.slice(0, 100))}`,

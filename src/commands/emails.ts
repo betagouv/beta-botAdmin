@@ -1,5 +1,5 @@
 import { config } from "../config.js";
-import { dimailFetch } from "../tools/dimail.js";
+import { dimailFetch, refreshToken } from "../tools/dimail.js";
 
 export interface CommandResult {
   reaction: string;
@@ -269,6 +269,11 @@ export async function handleEmailsCommand(text: string): Promise<CommandResult> 
   const rest = tokens.slice(1);
 
   try {
+    // Re-authenticate on every command that hits the API: fetch a fresh token
+    // from /token/ instead of reusing a cached or env-provided one.
+    if (["create", "list", "join", "leave"].includes(sub)) {
+      await refreshToken();
+    }
     switch (sub) {
       case "help":
       case "?":

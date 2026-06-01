@@ -4,3 +4,5 @@ node_modules
 evals/results
 SECURITY-TESTS.MD
 docs/
+client.nu
+env.example.nu
