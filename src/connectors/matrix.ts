@@ -8,7 +8,6 @@ import {
 } from "matrix-bot-sdk";
 import { marked } from "marked";
 import { config } from "../config.js";
-import type { Orchestrator } from "../orchestrator.js";
 import { handleEmailsCommand } from "../commands/emails.js";
 import { handleRoomsCommand } from "../commands/rooms.js";
 import { record, query, formatHistory } from "../commands/history.js";
@@ -247,7 +246,7 @@ export class MatrixConnector {
   private pendingVerif = new Map<string, VerifState>();
   private startupTs = Date.now();
 
-  constructor(private orchestrator: Orchestrator) {}
+  constructor() {}
 
   async start(): Promise<void> {
     // Set global.Olm before creating the client (needed for matrix-bot-sdk compat layer)
