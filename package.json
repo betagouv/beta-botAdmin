@@ -1,0 +1,44 @@
+{
+  "name": "betabot",
+  "version": "1.0.0",
+  "description": "Self-hosted bot for the beta.gouv.fr community",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node scripts/postinstall.cjs",
+    "build": "tsc",
+    "dev": "node --env-file=.env --import tsx src/index.ts",
+    "embed": "node --import tsx build-embeddings.ts",
+    "start": "node --env-file=.env dist/src/index.js",
+    "cli": "node --env-file=.env --import tsx src/cli.ts",
+    "eval": "node --env-file=.env --import tsx evals/run.ts",
+    "eval:generate": "node --env-file=.env --import tsx evals/generate.ts",
+    "eval:report": "node --import tsx evals/report.ts",
+    "get-data": "sh get-data.sh",
+    "get-device-id": "node --env-file=.env --import tsx src/get-device-id.ts"
+  },
+  "dependencies": {
+    "esbuild-wasm": "^0.28.0",
+    "gray-matter": "^4",
+    "ical": "^0.8",
+    "marked": "^18.0.4",
+    "matrix-bot-sdk": "github:element-hq/matrix-bot-sdk#0.9.0-element.0",
+    "openai": "^4",
+    "remark-frontmatter": "^5",
+    "remark-parse": "^11",
+    "remark-stringify": "^11",
+    "tsx": "^4",
+    "unified": "^11",
+    "wink-bm25-text-search": "^2"
+  },
+  "optionalDependencies": {
+    "@matrix-org/olm": "^3.2.15"
+  },
+  "devDependencies": {
+    "@types/ical": "^0.8.3",
+    "@types/node": "^20",
+    "typescript": "^5"
+  },
+  "overrides": {
+    "esbuild": "npm:esbuild-wasm@~0.28.0"
+  }
+}
