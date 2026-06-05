@@ -9,7 +9,6 @@ export interface CommandResult {
 const HELP = `📖 **Commandes \`/emails\` disponibles**
 
 - \`/emails create <liste> <email>\` — Crée une liste avec un propriétaire
-- \`/emails list\` — Affiche toutes les listes existantes
 - \`/emails list <liste>\` — Affiche les membres d'une liste
 - \`/emails join <liste> <email>\` — Ajoute un membre à une liste
 - \`/emails leave <liste> <email>\` — Retire un membre d'une liste
@@ -26,7 +25,7 @@ interface ListSpec {
   domain: string;
 }
 
-function parseListSpec(spec: string): ListSpec | { error: string } {
+export function parseListSpec(spec: string): ListSpec | { error: string } {
   if (!spec) return { error: "Le nom de liste est vide." };
   if (spec.includes("@")) {
     const at = spec.indexOf("@");
@@ -106,8 +105,6 @@ function isDimailError(res: unknown): res is { error: true; status: number; body
 }
 
 interface Alias {
-  user_name: string;
-  domain_name: string;
   destination: string;
 }
 
@@ -155,38 +152,8 @@ async function cmdCreate(args: string[]): Promise<CommandResult> {
   };
 }
 
-async function cmdListAll(): Promise<CommandResult> {
-  if (!config.dimail.domain) {
-    return {
-      reaction: "⚠️",
-      message:
-        "⚠️ Aucun domaine par défaut configuré (`DIMAIL_DOMAIN` vide dans `.env`).",
-    };
-  }
-  const res = (await dimailFetch(
-    `/domains/${encodeURIComponent(config.dimail.domain)}/aliases/`,
-  )) as Alias[] | { error: true; status: number; body: unknown };
-  if (isDimailError(res)) return dimailError("du listing", res);
-
-  const grouped = new Map<string, number>();
-  for (const a of res as Alias[]) {
-    grouped.set(a.user_name, (grouped.get(a.user_name) ?? 0) + 1);
-  }
-  if (grouped.size === 0) {
-    return {
-      reaction: "📋",
-      message: `📋 Aucune liste trouvée sur \`${config.dimail.domain}\`.`,
-    };
-  }
-  const lines = Array.from(grouped.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, count]) => `- \`${name}@${config.dimail.domain}\` (${count} membre${count > 1 ? "s" : ""})`);
-  return {
-    reaction: "📋",
-    message: `📋 **${grouped.size} liste(s) sur \`${config.dimail.domain}\`** :\n\n${lines.join("\n")}`,
-  };
-}
-
+// Members of a single list. Requires an explicit list name — there is no
+// "list everything" command (disabled on purpose).
 async function cmdListOne(spec: string): Promise<CommandResult> {
   const parsed = parseListSpec(spec);
   if ("error" in parsed) {
@@ -281,9 +248,9 @@ export async function handleEmailsCommand(text: string): Promise<CommandResult> 
       case "create":
         return await cmdCreate(rest);
       case "list":
-        if (rest.length === 0) return await cmdListAll();
+        // `/emails list <liste>` only. Bare `/emails list` is disabled on purpose.
         if (rest.length === 1) return await cmdListOne(rest[0] ?? "");
-        return badUsage("/emails list [<liste>]");
+        return badUsage("/emails list <liste>");
       case "join":
         return await cmdJoin(rest);
       case "leave":

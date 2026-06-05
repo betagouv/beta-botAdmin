@@ -724,6 +724,14 @@ export class MatrixConnector {
     const relates = (event.content as Record<string, unknown>)?.[
       "m.relates_to"
     ] as { rel_type?: string; event_id?: string } | undefined;
+
+    // Ignore message edits: an edit (`m.replace`) would otherwise re-run the
+    // command in the edited message. A command bot must act only on the original.
+    if (relates?.rel_type === "m.replace") {
+      console.log(`[Matrix] Ignoring edited message in ${roomId}`);
+      return;
+    }
+
     const threadRoot =
       relates?.rel_type === "m.thread"
         ? (relates.event_id ?? (event.event_id as string))

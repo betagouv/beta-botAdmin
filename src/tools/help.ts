@@ -48,7 +48,6 @@ Je suis un bot **à commandes** : je ne discute pas en langage naturel. Je ne r�
 |---|---|
 | \`/emails\` ou \`/emails help\` | Affiche cette aide /emails |
 | \`/emails create <liste> <email>\` | Crée une nouvelle liste avec un propriétaire |
-| \`/emails list\` | Affiche toutes les listes du domaine par défaut |
 | \`/emails list <liste>\` | Affiche les membres d'une liste |
 | \`/emails join <liste> <email>\` | Ajoute un membre à une liste |
 | \`/emails leave <liste> <email>\` | Retire un membre d'une liste |

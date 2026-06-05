@@ -6,3 +6,7 @@ SECURITY-TESTS.MD
 docs/
 client.nu
 env.example.nu
+*.csv
+migrate-ovh.ts
+MIGRATION-OVH.md
+dist
