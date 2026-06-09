@@ -36,6 +36,13 @@ export const config = {
     commandRoomsLabel: process.env["MATRIX_COMMAND_ROOMS_LABEL"],
     dimailRooms: optionalList("MATRIX_DIMAIL_ROOMS"),
     adminUsers: optionalList("MATRIX_ADMIN_USERS"),
+    // Email domains allowed to run /emails. Tchap encodes the email in the mxid
+    // localpart (`@prenom.nom-beta.gouv.fr:server`), so the gate matches the
+    // `-<domain>` suffix. Override via MATRIX_EMAILS_ALLOWED_DOMAINS (comma-sep).
+    emailsAllowedDomains:
+      optionalList("MATRIX_EMAILS_ALLOWED_DOMAINS").length > 0
+        ? optionalList("MATRIX_EMAILS_ALLOWED_DOMAINS")
+        : ["beta.gouv.fr", "numerique.gouv.fr", "modernisation.gouv.fr"],
     managedSpace: process.env["MATRIX_MANAGED_SPACE"],
     // Contact shown in the generic reply when someone talks to the bot outside a command.
     contact: process.env["MATRIX_CONTACT"],

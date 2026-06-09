@@ -4,9 +4,52 @@ import assert from "node:assert/strict";
 // `config` reads DIMAIL_DOMAIN once, at import time. Set it *before* importing
 // the module under test (dynamic import after the env is in place).
 process.env["DIMAIL_DOMAIN"] = "beta.gouv.fr";
-const { parseListSpec, handleEmailsCommand } = await import(
+const { parseListSpec, handleEmailsCommand, senderEmailDomain } = await import(
   "../src/commands/emails.js"
 );
+
+const ALLOWED = ["beta.gouv.fr", "numerique.gouv.fr", "modernisation.gouv.fr"];
+
+test("senderEmailDomain: allowed Tchap mxid returns its domain", () => {
+  assert.equal(
+    senderEmailDomain("@jean.dupont-beta.gouv.fr:agent.dinum.tchap.gouv.fr", ALLOWED),
+    "beta.gouv.fr",
+  );
+  assert.equal(
+    senderEmailDomain("@a.b-numerique.gouv.fr:agent.dinum.tchap.gouv.fr", ALLOWED),
+    "numerique.gouv.fr",
+  );
+  assert.equal(
+    senderEmailDomain("@a.b-modernisation.gouv.fr:agent.dinum.tchap.gouv.fr", ALLOWED),
+    "modernisation.gouv.fr",
+  );
+});
+
+test("senderEmailDomain: hyphenated name still resolves the domain suffix", () => {
+  assert.equal(
+    senderEmailDomain("@jean-marie.de-la-tour-beta.gouv.fr:agent.dinum.tchap.gouv.fr", ALLOWED),
+    "beta.gouv.fr",
+  );
+});
+
+test("senderEmailDomain: disallowed domain returns null", () => {
+  assert.equal(
+    senderEmailDomain("@someone-gmail.com:agent.dinum.tchap.gouv.fr", ALLOWED),
+    null,
+  );
+  assert.equal(
+    senderEmailDomain("@externe-acoss.fr:agent.dinum.tchap.gouv.fr", ALLOWED),
+    null,
+  );
+});
+
+test("senderEmailDomain: substring without hyphen boundary is not matched", () => {
+  // localpart `xbeta.gouv.fr` must NOT match `-beta.gouv.fr`
+  assert.equal(
+    senderEmailDomain("@xbeta.gouv.fr:agent.dinum.tchap.gouv.fr", ALLOWED),
+    null,
+  );
+});
 
 test("parseListSpec: bare name resolves to the default domain", () => {
   assert.deepEqual(parseListSpec("cartobio"), {

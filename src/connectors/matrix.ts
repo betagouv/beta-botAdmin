@@ -8,7 +8,7 @@ import {
 } from "matrix-bot-sdk";
 import { marked } from "marked";
 import { config } from "../config.js";
-import { handleEmailsCommand } from "../commands/emails.js";
+import { handleEmailsCommand, senderEmailDomain } from "../commands/emails.js";
 import { handleRoomsCommand } from "../commands/rooms.js";
 import { record, query, formatHistory } from "../commands/history.js";
 import { buildCommandOnlyNotice } from "../commands/notice.js";
@@ -818,6 +818,20 @@ export class MatrixConnector {
       }
 
       if (text === "/emails" || text.startsWith("/emails ") || text.startsWith("/emails\n")) {
+        const allowedDomains = config.matrix.emailsAllowedDomains;
+        if (!senderEmailDomain(sender, allowedDomains)) {
+          await this.sendReaction(roomId, userEventId, "⛔");
+          await this.sendMessage(
+            roomId,
+            `⛔ La commande \`/emails\` est réservée aux adresses ${allowedDomains
+              .map((d) => `\`@${d}\``)
+              .join(", ")}.`,
+            userEventId,
+            threadRoot,
+          );
+          record({ user: sender, room: roomId, kind: "slash", text, status: "refused", detail: "email domain not allowed" });
+          return;
+        }
         const result = await handleEmailsCommand(text);
         await this.sendReaction(roomId, userEventId, result.reaction);
         await this.sendMessage(roomId, result.message, userEventId, threadRoot);

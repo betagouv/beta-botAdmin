@@ -53,6 +53,25 @@ export function parseListSpec(spec: string): ListSpec | { error: string } {
   return { user_name: spec, domain: config.dimail.domain };
 }
 
+// Authorization gate for /emails. Tchap mxids encode the user's email in the
+// localpart: `prenom.nom@beta.gouv.fr` → `@prenom.nom-beta.gouv.fr:server`.
+// We allow the command only when that localpart ends with `-<allowed domain>`.
+// Returns the matched domain, or null if the sender is not allowed.
+export function senderEmailDomain(
+  sender: string,
+  allowedDomains: string[],
+): string | null {
+  const colon = sender.indexOf(":");
+  const localpart = sender.slice(
+    sender.startsWith("@") ? 1 : 0,
+    colon === -1 ? undefined : colon,
+  );
+  for (const domain of allowedDomains) {
+    if (localpart.endsWith(`-${domain}`)) return domain;
+  }
+  return null;
+}
+
 function fmtListAddress(l: ListSpec): string {
   return `\`${l.user_name}@${l.domain}\``;
 }
