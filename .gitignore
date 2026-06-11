@@ -1,5 +1,7 @@
 data
 .env
+.env.prod
+.env.*.local
 node_modules
 evals/results
 SECURITY-TESTS.MD
@@ -10,3 +12,4 @@ env.example.nu
 migrate-ovh.ts
 MIGRATION-OVH.md
 dist
+scripts/

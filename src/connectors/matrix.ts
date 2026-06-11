@@ -8,7 +8,7 @@ import {
 } from "matrix-bot-sdk";
 import { marked } from "marked";
 import { config } from "../config.js";
-import { handleEmailsCommand } from "../commands/emails.js";
+import { handleEmailsCommand, senderEmailDomain } from "../commands/emails.js";
 import { handleRoomsCommand } from "../commands/rooms.js";
 import { record, query, formatHistory } from "../commands/history.js";
 import { buildCommandOnlyNotice } from "../commands/notice.js";
@@ -681,7 +681,18 @@ export class MatrixConnector {
     event: Record<string, unknown>,
   ): Promise<void> {
     const sender = event.sender as string;
-    if (sender === this.ownUserId) return;
+    // Messages from the bot's own account are normally ignored, but an
+    // automation (e.g. n8n) may share the account and post slash commands —
+    // it can't @mention the bot since you can't ping yourself. With
+    // MATRIX_ALLOW_SELF_COMMANDS=true, own messages starting with "/" are
+    // processed; everything else (including the bot's own replies) is dropped.
+    const isSelf = sender === this.ownUserId;
+    if (
+      isSelf &&
+      !config.matrix.allowSelfCommands &&
+      !config.matrix.noMentionUsers.includes(sender)
+    )
+      return;
 
     const eventTs = event.origin_server_ts as number | undefined;
     if (eventTs !== undefined && eventTs < this.startupTs) return;
@@ -760,15 +771,23 @@ export class MatrixConnector {
 
     // Slash command rule:
     // - In DM: any leading "/" counts.
+    // - From the bot's own account (allowSelfCommands) or an exempted account
+    //   (noMentionUsers, e.g. an n8n automation): any leading "/" counts, no
+    //   mention needed. Permission checks (rooms, domain, admin) still apply.
     // - In a room: must be a REAL @mention of the bot (pill), and "/" must be the
     //   first char right after the stripped mention text.
-    const isSlashCommand = isDM
+    const isNoMentionUser = config.matrix.noMentionUsers.includes(sender);
+    const isSlashCommand = isDM || isSelf || isNoMentionUser
       ? trimmedBody.startsWith("/")
       : isMentioned && mentionAtStart && afterMention.startsWith("/");
 
     console.log(
       `[Matrix] Message from ${sender} in ${roomId} isDM=${isDM} isMentioned=${isMentioned} mentionAtStart=${mentionAtStart} isSlashCommand=${isSlashCommand} body=${JSON.stringify(body.slice(0, 100))}`,
     );
+
+    // Loop guard: own messages that are not slash commands (i.e. the bot's own
+    // replies) must never reach the dispatch or the generic notice below.
+    if (isSelf && !isSlashCommand) return;
 
     if (!isDM && !isMentioned && !isSlashCommand) return;
 
@@ -818,6 +837,20 @@ export class MatrixConnector {
       }
 
       if (text === "/emails" || text.startsWith("/emails ") || text.startsWith("/emails\n")) {
+        const allowedDomains = config.matrix.emailsAllowedDomains;
+        if (!senderEmailDomain(sender, allowedDomains)) {
+          await this.sendReaction(roomId, userEventId, "⛔");
+          await this.sendMessage(
+            roomId,
+            `⛔ La commande \`/emails\` est réservée aux adresses ${allowedDomains
+              .map((d) => `\`@${d}\``)
+              .join(", ")}.`,
+            userEventId,
+            threadRoot,
+          );
+          record({ user: sender, room: roomId, kind: "slash", text, status: "refused", detail: "email domain not allowed" });
+          return;
+        }
         const result = await handleEmailsCommand(text);
         await this.sendReaction(roomId, userEventId, result.reaction);
         await this.sendMessage(roomId, result.message, userEventId, threadRoot);
