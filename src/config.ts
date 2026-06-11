@@ -43,6 +43,19 @@ export const config = {
       optionalList("MATRIX_EMAILS_ALLOWED_DOMAINS").length > 0
         ? optionalList("MATRIX_EMAILS_ALLOWED_DOMAINS")
         : ["beta.gouv.fr", "numerique.gouv.fr", "modernisation.gouv.fr"],
+    // Let the bot's own account trigger slash commands (e.g. an automation
+    // like n8n posting with the same account — you can't @mention yourself).
+    // Only messages starting with "/" are processed, so the bot's own replies
+    // can never loop back into the handler.
+    allowSelfCommands: process.env["MATRIX_ALLOW_SELF_COMMANDS"] === "true",
+    // Accounts whose slash commands are accepted in rooms WITHOUT @mentioning
+    // the bot (e.g. an n8n automation account). All other checks still apply
+    // (command rooms, email domain, admin). Override via MATRIX_NO_MENTION_USERS
+    // (comma-separated mxids).
+    noMentionUsers:
+      optionalList("MATRIX_NO_MENTION_USERS").length > 0
+        ? optionalList("MATRIX_NO_MENTION_USERS")
+        : ["@betabotadmin-beta.gouv.fr:agent.dinum.tchap.gouv.fr"],
     managedSpace: process.env["MATRIX_MANAGED_SPACE"],
     // Contact shown in the generic reply when someone talks to the bot outside a command.
     contact: process.env["MATRIX_CONTACT"],

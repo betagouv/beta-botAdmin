@@ -681,7 +681,13 @@ export class MatrixConnector {
     event: Record<string, unknown>,
   ): Promise<void> {
     const sender = event.sender as string;
-    if (sender === this.ownUserId) return;
+    // Messages from the bot's own account are normally ignored, but an
+    // automation (e.g. n8n) may share the account and post slash commands —
+    // it can't @mention the bot since you can't ping yourself. With
+    // MATRIX_ALLOW_SELF_COMMANDS=true, own messages starting with "/" are
+    // processed; everything else (including the bot's own replies) is dropped.
+    const isSelf = sender === this.ownUserId;
+    if (isSelf && !config.matrix.allowSelfCommands) return;
 
     const eventTs = event.origin_server_ts as number | undefined;
     if (eventTs !== undefined && eventTs < this.startupTs) return;
@@ -760,15 +766,23 @@ export class MatrixConnector {
 
     // Slash command rule:
     // - In DM: any leading "/" counts.
+    // - From the bot's own account (allowSelfCommands) or an exempted account
+    //   (noMentionUsers, e.g. an n8n automation): any leading "/" counts, no
+    //   mention needed. Permission checks (rooms, domain, admin) still apply.
     // - In a room: must be a REAL @mention of the bot (pill), and "/" must be the
     //   first char right after the stripped mention text.
-    const isSlashCommand = isDM
+    const isNoMentionUser = config.matrix.noMentionUsers.includes(sender);
+    const isSlashCommand = isDM || isSelf || isNoMentionUser
       ? trimmedBody.startsWith("/")
       : isMentioned && mentionAtStart && afterMention.startsWith("/");
 
     console.log(
       `[Matrix] Message from ${sender} in ${roomId} isDM=${isDM} isMentioned=${isMentioned} mentionAtStart=${mentionAtStart} isSlashCommand=${isSlashCommand} body=${JSON.stringify(body.slice(0, 100))}`,
     );
+
+    // Loop guard: own messages that are not slash commands (i.e. the bot's own
+    // replies) must never reach the dispatch or the generic notice below.
+    if (isSelf && !isSlashCommand) return;
 
     if (!isDM && !isMentioned && !isSlashCommand) return;
 
