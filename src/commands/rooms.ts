@@ -1,4 +1,5 @@
 import type { MatrixClient } from "matrix-bot-sdk";
+import { config } from "../config.js";
 import { addCreatedRoom, removeCreatedRoom } from "./created-rooms.js";
 
 // Manage rooms inside a single configured Space (MATRIX_MANAGED_SPACE):
@@ -152,18 +153,28 @@ async function createRoom(
     };
   }
 
-  // Keep the bot as admin (100) and make the creator a moderator (50) so they
-  // can manage/close their own room. `users` is replaced wholesale by the
+  // Who gets invited: the requester, or — when the bot created the room for
+  // itself (self command, e.g. via n8n) — the configured default invitees.
+  // The bot's own account must never be in the list: inviting yourself (or a
+  // user already in the room) is rejected by the server with M_FORBIDDEN.
+  const invitees = (
+    inviteUserId && inviteUserId !== botUserId
+      ? [inviteUserId]
+      : config.matrix.defaultInvites
+  ).filter((u) => u !== botUserId);
+
+  // Keep the bot as admin (100) and make every invitee a moderator (50) so
+  // they can manage/close the room. `users` is replaced wholesale by the
   // override, so the bot must be listed explicitly or it loses its power.
   const users: Record<string, number> = { [botUserId]: 100 };
-  if (inviteUserId) users[inviteUserId] = MODERATOR_POWER_LEVEL;
+  for (const u of invitees) users[u] = MODERATOR_POWER_LEVEL;
 
   const spaceVia = serverName(spaceId);
   const roomId = await client.createRoom({
     name,
     preset: "private_chat",
     visibility: "private",
-    invite: inviteUserId ? [inviteUserId] : [],
+    invite: invitees,
     power_level_content_override: { users },
     initial_state: [
       {
@@ -179,11 +190,12 @@ async function createRoom(
     ],
   });
 
-  // Lower the thresholds so a moderator (50) can edit all room settings
-  // (name, topic, avatar, access, history visibility, encryption…). Done as a
-  // follow-up power_levels event because Synapse rejects a full power-level
-  // override at create time. Only privilege-changing / destructive events stay
-  // admin-only (100) so a moderator can't promote themselves or remove the bot.
+  // Lower every threshold so a moderator (50) has all possible rights: room
+  // settings, kick/ban/redact/invite, and even power_levels / server_acl /
+  // tombstone. Matrix auth rules still cap what a level-50 user can do with
+  // power_levels: they can't grant above their own level nor touch users at a
+  // higher level, so the bot (100) stays safe. Done as a follow-up event
+  // because Synapse rejects a full power-level override at create time.
   try {
     const pl = (await client.getRoomStateEvent(
       roomId,
@@ -206,10 +218,9 @@ async function createRoom(
         "m.room.history_visibility": MODERATOR_POWER_LEVEL,
         "m.room.encryption": MODERATOR_POWER_LEVEL,
         "m.room.join_rules": MODERATOR_POWER_LEVEL,
-        // privilege / destructive — stay admin-only:
-        "m.room.power_levels": 100,
-        "m.room.server_acl": 100,
-        "m.room.tombstone": 100,
+        "m.room.power_levels": MODERATOR_POWER_LEVEL,
+        "m.room.server_acl": MODERATOR_POWER_LEVEL,
+        "m.room.tombstone": MODERATOR_POWER_LEVEL,
       },
     });
   } catch {
