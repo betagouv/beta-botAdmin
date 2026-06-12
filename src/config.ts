@@ -56,6 +56,17 @@ export const config = {
       optionalList("MATRIX_NO_MENTION_USERS").length > 0
         ? optionalList("MATRIX_NO_MENTION_USERS")
         : ["@betabotadmin-beta.gouv.fr:agent.dinum.tchap.gouv.fr"],
+    // Users invited (as moderators) when the bot creates a room for itself —
+    // i.e. a self command (e.g. n8n posting with the bot's account): the bot
+    // can't invite its own account, so these people get invited instead.
+    // Override via MATRIX_DEFAULT_INVITES (comma-separated mxids).
+    defaultInvites:
+      optionalList("MATRIX_DEFAULT_INVITES").length > 0
+        ? optionalList("MATRIX_DEFAULT_INVITES")
+        : [
+            "@maxime.torgue-modernisation.gouv.fr:agent.dinum.tchap.gouv.fr",
+            "@julien.bouquillon-beta.gouv.fr:agent.dinum.tchap.gouv.fr",
+          ],
     managedSpace: process.env["MATRIX_MANAGED_SPACE"],
     // Contact shown in the generic reply when someone talks to the bot outside a command.
     contact: process.env["MATRIX_CONTACT"],
