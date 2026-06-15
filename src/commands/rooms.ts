@@ -9,32 +9,6 @@ import { addCreatedRoom, removeCreatedRoom } from "./created-rooms.js";
 // A requester must have at least this power level in a room to close it.
 const MODERATOR_POWER_LEVEL = 50;
 
-// Human-friendly aliases for power levels accepted by `/salon role`.
-const LEVEL_ALIASES: Record<string, number> = {
-  membre: 0,
-  member: 0,
-  user: 0,
-  utilisateur: 0,
-  mod: 50,
-  modo: 50,
-  moderateur: 50,
-  modérateur: 50,
-  moderator: 50,
-  admin: 100,
-  administrateur: 100,
-};
-
-// Parse a level from a keyword (admin/moderateur/membre) or a 0–100 integer.
-function parseLevel(raw: string): number | null {
-  const key = raw.toLowerCase();
-  if (key in LEVEL_ALIASES) return LEVEL_ALIASES[key]!;
-  if (/^\d+$/.test(raw)) {
-    const n = parseInt(raw, 10);
-    if (n >= 0 && n <= 100) return n;
-  }
-  return null;
-}
-
 export interface RoomCmdResult {
   reaction: string;
   message: string;
@@ -43,6 +17,22 @@ export interface RoomCmdResult {
 interface SpaceChild {
   roomId: string;
   name: string;
+  isSpace: boolean;
+}
+
+// Room type from m.room.create (`m.space` for spaces, undefined for normal rooms).
+async function roomType(
+  client: MatrixClient,
+  roomId: string,
+): Promise<string | null> {
+  try {
+    const c = (await client.getRoomStateEvent(roomId, "m.room.create", "")) as {
+      type?: string;
+    };
+    return c?.type ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Server-name part of a Matrix ID, used as the `via` for space relations.
@@ -133,9 +123,38 @@ async function listChildren(
     } catch {
       // room not joinable / no name — keep empty
     }
-    result.push({ roomId, name });
+    const isSpace = (await roomType(client, roomId)) === "m.space";
+    result.push({ roomId, name, isSpace });
   }
   return result;
+}
+
+// Whether a user is a joined member of a room/space.
+async function isRoomMember(
+  client: MatrixClient,
+  roomId: string,
+  userId: string,
+): Promise<boolean> {
+  try {
+    const members = await client.getJoinedRoomMembers(roomId);
+    return members.includes(userId);
+  } catch {
+    return false;
+  }
+}
+
+// Find a sub-space of the managed space whose name matches (case-insensitive).
+async function resolveSubSpace(
+  client: MatrixClient,
+  managedSpaceId: string,
+  name: string,
+): Promise<SpaceChild | null> {
+  const children = await listChildren(client, managedSpaceId);
+  return (
+    children.find(
+      (c) => c.isSpace && c.name.toLowerCase() === name.toLowerCase(),
+    ) ?? null
+  );
 }
 
 async function createRoom(
@@ -144,12 +163,18 @@ async function createRoom(
   name: string,
   inviteUserId: string,
   botUserId: string,
+  spaceLabel?: string | null,
 ): Promise<RoomCmdResult> {
+  const where = spaceLabel ? `l'espace **${spaceLabel}**` : "l'espace géré";
   const existing = await listChildren(client, spaceId);
-  if (existing.some((c) => c.name.toLowerCase() === name.toLowerCase())) {
+  if (
+    existing.some(
+      (c) => !c.isSpace && c.name.toLowerCase() === name.toLowerCase(),
+    )
+  ) {
     return {
       reaction: "⚠️",
-      message: `⚠️ Un salon nommé **${name}** existe déjà dans l'espace géré.`,
+      message: `⚠️ Un salon nommé **${name}** existe déjà dans ${where}.`,
     };
   }
 
@@ -237,7 +262,111 @@ async function createRoom(
 
   return {
     reaction: "✅",
-    message: `🏠 Salon **${name}** créé et rattaché à l'espace géré.\nID : \`${roomId}\``,
+    message: `🏠 Salon **${name}** créé et rattaché à ${where}.\nID : \`${roomId}\``,
+  };
+}
+
+// Create a Space (a room with type m.space) and attach it under the managed
+// space, so `/salon create <nom> <cet-espace>` can target it.
+async function createSpace(
+  client: MatrixClient,
+  parentSpaceId: string,
+  name: string,
+  inviteUserId: string,
+  botUserId: string,
+): Promise<RoomCmdResult> {
+  const existing = await listChildren(client, parentSpaceId);
+  if (
+    existing.some(
+      (c) => c.isSpace && c.name.toLowerCase() === name.toLowerCase(),
+    )
+  ) {
+    return {
+      reaction: "⚠️",
+      message: `⚠️ Un espace nommé **${name}** existe déjà.`,
+    };
+  }
+
+  const invitees = (
+    inviteUserId && inviteUserId !== botUserId
+      ? [inviteUserId]
+      : config.matrix.defaultInvites
+  ).filter((u) => u !== botUserId);
+
+  // Bot stays admin (100), invitees become moderators (50).
+  const users: Record<string, number> = { [botUserId]: 100 };
+  for (const u of invitees) users[u] = MODERATOR_POWER_LEVEL;
+
+  const parentVia = serverName(parentSpaceId);
+  const spaceId = await client.createRoom({
+    name,
+    preset: "private_chat",
+    visibility: "private",
+    invite: invitees,
+    creation_content: { type: "m.space" },
+    power_level_content_override: { users },
+    initial_state: [
+      {
+        type: "m.space.parent",
+        state_key: parentSpaceId,
+        content: { via: [parentVia], canonical: true },
+      },
+    ],
+  });
+
+  // Attach the new space as a child of the managed space.
+  await client.sendStateEvent(parentSpaceId, "m.space.child", spaceId, {
+    via: [serverName(spaceId)],
+  });
+
+  return {
+    reaction: "✅",
+    message: `🌌 Espace **${name}** créé et rattaché à l'espace géré.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID : \`${spaceId}\``,
+  };
+}
+
+// Delete sub-space(s) of the managed space matching a name. Because duplicates
+// can exist (e.g. two bots created the same space), every match is removed.
+async function deleteSpace(
+  client: MatrixClient,
+  managedSpaceId: string,
+  name: string,
+  botUserId: string,
+  requesterUserId: string,
+): Promise<RoomCmdResult> {
+  const spaces = (await listChildren(client, managedSpaceId)).filter(
+    (c) => c.isSpace && c.name.toLowerCase() === name.toLowerCase(),
+  );
+  if (!spaces.length) {
+    return {
+      reaction: "❌",
+      message: `❌ Aucun espace nommé **${name}**. Tape \`/espace list\`.`,
+    };
+  }
+
+  let closed = 0;
+  let denied = 0;
+  for (const sp of spaces) {
+    // Requester must be moderator+ in the space (bot itself is exempt).
+    const level = await powerLevelOf(client, sp.roomId, requesterUserId);
+    if (requesterUserId !== botUserId && level < MODERATOR_POWER_LEVEL) {
+      denied++;
+      continue;
+    }
+    await detachAndClose(client, managedSpaceId, sp.roomId, botUserId);
+    closed++;
+  }
+
+  if (closed === 0) {
+    return {
+      reaction: "⛔",
+      message: `⛔ Tu dois être **modérateur ou plus** (niveau ≥ ${MODERATOR_POWER_LEVEL}) dans **${name}** pour le supprimer.`,
+    };
+  }
+  const extra = denied ? ` (${denied} ignoré(s) faute de droits)` : "";
+  return {
+    reaction: "✅",
+    message: `🗑 ${closed} espace(s) **${name}** supprimé(s) : détaché(s) de l'espace géré + membres expulsés + le bot a quitté${extra}.`,
   };
 }
 
@@ -265,21 +394,23 @@ async function closeRoom(
   name: string,
   botUserId: string,
   requesterUserId: string,
+  spaceLabel?: string | null,
 ): Promise<RoomCmdResult> {
+  const where = spaceLabel ? `l'espace **${spaceLabel}**` : "l'espace géré";
   const children = await listChildren(client, spaceId);
   const matches = children.filter(
-    (c) => c.name.toLowerCase() === name.toLowerCase(),
+    (c) => !c.isSpace && c.name.toLowerCase() === name.toLowerCase(),
   );
   if (matches.length === 0) {
     return {
       reaction: "❌",
-      message: `❌ Aucun salon nommé **${name}** dans l'espace géré. Tape \`/salon list\` pour voir les salons.`,
+      message: `❌ Aucun salon nommé **${name}** dans ${where}. Tape \`/salon list\` pour voir les salons.`,
     };
   }
   if (matches.length > 1) {
     return {
       reaction: "⚠️",
-      message: `⚠️ Plusieurs salons s'appellent **${name}**. Renomme l'un d'eux pour lever l'ambiguïté avant de supprimer.`,
+      message: `⚠️ Plusieurs salons s'appellent **${name}** dans ${where}. Renomme l'un d'eux pour lever l'ambiguïté avant de supprimer.`,
     };
   }
   const roomId = matches[0]!.roomId;
@@ -297,102 +428,62 @@ async function closeRoom(
 
   return {
     reaction: "✅",
-    message: `🗑 Salon **${name}** fermé : détaché de l'espace, ${kicked} membre(s) expulsé(s), le bot a quitté.`,
+    message: `🗑 Salon **${name}** fermé : détaché de ${where}, ${kicked} membre(s) expulsé(s), le bot a quitté.`,
   };
 }
 
 // Resolve a unique child room by name, or return an error result.
-async function resolveUniqueChild(
-  client: MatrixClient,
-  spaceId: string,
-  name: string,
-): Promise<{ roomId: string } | { error: RoomCmdResult }> {
-  const matches = (await listChildren(client, spaceId)).filter(
-    (c) => c.name.toLowerCase() === name.toLowerCase(),
-  );
-  if (matches.length === 0)
-    return {
-      error: {
-        reaction: "❌",
-        message: `❌ Aucun salon nommé **${name}** dans l'espace géré. Tape \`/salon list\`.`,
-      },
-    };
-  if (matches.length > 1)
-    return {
-      error: {
-        reaction: "⚠️",
-        message: `⚠️ Plusieurs salons s'appellent **${name}**. Renomme l'un d'eux pour lever l'ambiguïté.`,
-      },
-    };
-  return { roomId: matches[0]!.roomId };
-}
-
-async function setRole(
-  client: MatrixClient,
-  spaceId: string,
-  roomName: string,
-  targetUserId: string,
-  levelStr: string,
-  requesterIsAdmin: boolean,
-): Promise<RoomCmdResult> {
-  if (!requesterIsAdmin) {
-    return {
-      reaction: "⛔",
-      message:
-        "⛔ `/salon role` est réservée aux administrateurs (liste `MATRIX_ADMIN_USERS`).",
-    };
-  }
-  if (!/^@[^:]+:.+/.test(targetUserId)) {
-    return {
-      reaction: "❌",
-      message: `❌ Identifiant utilisateur invalide : \`${targetUserId}\`. Format attendu : \`@nom:serveur\`.`,
-    };
-  }
-  const level = parseLevel(levelStr);
-  if (level === null) {
-    return {
-      reaction: "❌",
-      message: `❌ Niveau invalide : \`${levelStr}\`. Utilise \`membre\`/\`moderateur\`/\`admin\` ou un nombre 0–100.`,
-    };
-  }
-
-  const resolved = await resolveUniqueChild(client, spaceId, roomName);
-  if ("error" in resolved) return resolved.error;
-  const roomId = resolved.roomId;
-
-  // Read current power levels, update just this user, write back.
-  const pl = (await client.getRoomStateEvent(
-    roomId,
-    "m.room.power_levels",
-    "",
-  )) as Record<string, unknown> & { users?: Record<string, number> };
-  const content = { ...pl, users: { ...(pl.users ?? {}), [targetUserId]: level } };
-  await client.sendStateEvent(roomId, "m.room.power_levels", "", content);
-
-  const labelEntry = Object.entries(LEVEL_ALIASES).find(([, v]) => v === level);
-  const label = labelEntry ? ` (${labelEntry[0]})` : "";
-  return {
-    reaction: "✅",
-    message: `✅ Niveau de **${targetUserId}** dans **${roomName}** réglé à **${level}**${label}.`,
-  };
-}
-
 async function listRooms(
   client: MatrixClient,
   spaceId: string,
 ): Promise<RoomCmdResult> {
-  // Only list rooms that actually have a name (skip unnamed / unreadable ones),
-  // and show just the name — no room IDs.
-  const named = (await listChildren(client, spaceId)).filter(
-    (c) => c.name.trim().length > 0,
-  );
-  if (named.length === 0) {
-    return { reaction: "📭", message: "📭 Aucun salon nommé dans l'espace géré." };
+  // Rooms live either directly under the managed space or inside a sub-space.
+  // List them grouped by espace; skip unnamed / unreadable entries.
+  const children = await listChildren(client, spaceId);
+  const rootRooms = children.filter((c) => !c.isSpace && c.name.trim());
+  const subSpaces = children.filter((c) => c.isSpace && c.name.trim());
+
+  const sections: string[] = [];
+  if (rootRooms.length) {
+    sections.push(
+      `**Espace géré** :\n${rootRooms.map((r) => `- ${r.name}`).join("\n")}`,
+    );
   }
-  const lines = named.map((c) => `- **${c.name}**`).join("\n");
+  for (const sp of subSpaces) {
+    const kids = (await listChildren(client, sp.roomId)).filter(
+      (c) => !c.isSpace && c.name.trim(),
+    );
+    sections.push(
+      `**${sp.name}** (espace) :\n${
+        kids.length ? kids.map((r) => `- ${r.name}`).join("\n") : "- _(vide)_"
+      }`,
+    );
+  }
+
+  if (!sections.length) {
+    return { reaction: "📭", message: "📭 Aucun salon dans l'espace géré." };
+  }
   return {
     reaction: "📋",
-    message: `📋 Salons de l'espace géré (${named.length}) :\n${lines}`,
+    message: `📋 Salons :\n\n${sections.join("\n\n")}`,
+  };
+}
+
+// List the sub-spaces of the managed space.
+async function listSpaces(
+  client: MatrixClient,
+  spaceId: string,
+): Promise<RoomCmdResult> {
+  const spaces = (await listChildren(client, spaceId)).filter(
+    (c) => c.isSpace && c.name.trim(),
+  );
+  if (!spaces.length) {
+    return { reaction: "📭", message: "📭 Aucun espace dans l'espace géré." };
+  }
+  const lines = spaces.map((s) => `- **${s.name}**`).join("\n");
+  return {
+    reaction: "📋",
+    message: `🌌 Espaces (${spaces.length}) :\n${lines}`,
   };
 }
 
@@ -403,12 +494,99 @@ function helpMessage(): RoomCmdResult {
 
 | Sous-commande | Effet |
 |---|---|
-| \`/salon list\` | Liste les salons de l'espace géré |
-| \`/salon create <nom>\` | Crée un salon (chiffré), t'y invite, et le rattache à l'espace |
-| \`/salon delete <nom>\` | Ferme le salon : détache de l'espace + expulse les membres + le bot quitte |
+| \`/salon list\` | Liste les salons, groupés par espace |
+| \`/salon create <nom>\` | Crée un salon (chiffré), t'y invite, et le rattache à l'espace géré |
+| \`/salon create <nom> <espace>\` | Idem, mais rattache le salon au sous-espace **<espace>** |
+| \`/salon delete <nom>\` | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
+| \`/salon delete <nom> <espace>\` | Idem, mais cible le salon situé dans le sous-espace **<espace>** (pour lever l'ambiguïté si le même nom existe ailleurs) |
 
-Le \`<nom>\` peut contenir des espaces (les guillemets sont optionnels).`,
+Le \`<nom>\` peut contenir des espaces (les guillemets sont optionnels). Le dernier mot n'est traité comme **<espace>** que s'il correspond à un sous-espace existant (voir \`/espace list\`).`,
   };
+}
+
+function spacesHelpMessage(): RoomCmdResult {
+  return {
+    reaction: "📖",
+    message: `# \`/espace\` — gestion des sous-espaces
+
+| Sous-commande | Effet |
+|---|---|
+| \`/espace list\` | Liste les sous-espaces de l'espace géré |
+| \`/espace create <nom>\` | Crée un sous-espace et le rattache à l'espace géré |
+| \`/espace delete <nom>\` | Supprime le(s) sous-espace(s) de ce nom (modérateur+ requis) |
+
+Ensuite, range un salon dedans : \`/salon create <nom-salon> <nom-espace>\`.`,
+  };
+}
+
+// `text` is the full slash command, e.g. `/espace create Pole Tech`.
+export async function handleSpacesCommand(
+  client: MatrixClient,
+  managedSpaceId: string | undefined,
+  botUserId: string,
+  senderUserId: string,
+  text: string,
+): Promise<RoomCmdResult> {
+  if (!managedSpaceId) {
+    return {
+      reaction: "⛔",
+      message:
+        "⛔ Gestion des espaces désactivée : `MATRIX_MANAGED_SPACE` n'est pas configuré.",
+    };
+  }
+
+  const m = text.trim().match(/^\/espace\s+(\S+)\s*([\s\S]*)$/i);
+  const sub = (m?.[1] ?? "help").toLowerCase();
+  const arg = (m?.[2] ?? "").trim().replace(/^["']|["']$/g, "").trim();
+
+  try {
+    switch (sub) {
+      case "list":
+        return await listSpaces(client, managedSpaceId);
+      case "create":
+      case "new":
+        if (!arg)
+          return {
+            reaction: "❌",
+            message: "❌ Usage : `/espace create <nom>`",
+          };
+        return await createSpace(
+          client,
+          managedSpaceId,
+          arg,
+          senderUserId,
+          botUserId,
+        );
+      case "delete":
+      case "close":
+      case "supprimer":
+        if (!arg)
+          return {
+            reaction: "❌",
+            message: "❌ Usage : `/espace delete <nom>`",
+          };
+        return await deleteSpace(
+          client,
+          managedSpaceId,
+          arg,
+          botUserId,
+          senderUserId,
+        );
+      case "help":
+      case "aide":
+        return spacesHelpMessage();
+      default:
+        return {
+          reaction: "❌",
+          message: `❌ Sous-commande inconnue : \`${sub}\`. Tape \`/espace help\`.`,
+        };
+    }
+  } catch (err) {
+    return {
+      reaction: "❌",
+      message: `❌ Erreur : ${String(err instanceof Error ? err.message : err).slice(0, 300)}`,
+    };
+  }
 }
 
 // `text` is the full slash command, e.g. `/salon create ma-team`.
@@ -417,7 +595,6 @@ export async function handleRoomsCommand(
   spaceId: string | undefined,
   botUserId: string,
   senderUserId: string,
-  requesterIsAdmin: boolean,
   text: string,
 ): Promise<RoomCmdResult> {
   if (!spaceId) {
@@ -437,43 +614,85 @@ export async function handleRoomsCommand(
       case "list":
         return await listRooms(client, spaceId);
       case "create":
-      case "new":
+      case "new": {
         if (!arg)
           return {
             reaction: "❌",
-            message: "❌ Usage : `/salon create <nom>`",
+            message: "❌ Usage : `/salon create <nom> [espace]`",
           };
-        return await createRoom(client, spaceId, arg, senderUserId, botUserId);
+        // Optional target espace = last word, but only when it names an
+        // existing sub-space. Otherwise the whole arg is the room name and the
+        // room is attached to the managed space (backward compatible).
+        const tokens = arg.split(/\s+/);
+        let targetSpaceId = spaceId;
+        let targetSpaceName: string | null = null;
+        let roomName = arg;
+        if (tokens.length >= 2) {
+          const sub2 = await resolveSubSpace(
+            client,
+            spaceId,
+            tokens[tokens.length - 1]!,
+          );
+          if (sub2) {
+            // Only members of the target espace may create rooms inside it.
+            // The bot itself (self command) is exempt.
+            if (
+              senderUserId !== botUserId &&
+              !(await isRoomMember(client, sub2.roomId, senderUserId))
+            ) {
+              return {
+                reaction: "⛔",
+                message: `⛔ Tu n'es pas membre de l'espace **${sub2.name}**, tu ne peux pas y créer de salon.`,
+              };
+            }
+            targetSpaceId = sub2.roomId;
+            targetSpaceName = sub2.name;
+            roomName = tokens.slice(0, -1).join(" ");
+          }
+        }
+        return await createRoom(
+          client,
+          targetSpaceId,
+          roomName,
+          senderUserId,
+          botUserId,
+          targetSpaceName,
+        );
+      }
       case "delete":
       case "close":
-      case "supprimer":
+      case "supprimer": {
         if (!arg)
           return {
             reaction: "❌",
-            message: "❌ Usage : `/salon delete <nom>`",
+            message: "❌ Usage : `/salon delete <nom> [espace]`",
           };
-        return await closeRoom(client, spaceId, arg, botUserId, senderUserId);
-      case "role":
-      case "droit":
-      case "droits":
-      case "power": {
-        const toks = arg.split(/\s+/).filter(Boolean);
-        if (toks.length < 3)
-          return {
-            reaction: "❌",
-            message:
-              "❌ Usage : `/salon role <salon> <@user:serveur> <niveau>` (niveau = membre/moderateur/admin ou 0–100)",
-          };
-        const levelStr = toks.pop()!;
-        const targetUser = toks.pop()!;
-        const roomName = toks.join(" ").replace(/^["']|["']$/g, "").trim();
-        return await setRole(
+        // Same scoping as create: trailing word selects the sub-space to look
+        // in, but only when it names an existing one. Disambiguates a room name
+        // that exists in several espaces.
+        const tokensD = arg.split(/\s+/);
+        let targetSpaceId = spaceId;
+        let targetSpaceName: string | null = null;
+        let roomName = arg;
+        if (tokensD.length >= 2) {
+          const subD = await resolveSubSpace(
+            client,
+            spaceId,
+            tokensD[tokensD.length - 1]!,
+          );
+          if (subD) {
+            targetSpaceId = subD.roomId;
+            targetSpaceName = subD.name;
+            roomName = tokensD.slice(0, -1).join(" ");
+          }
+        }
+        return await closeRoom(
           client,
-          spaceId,
+          targetSpaceId,
           roomName,
-          targetUser,
-          levelStr,
-          requesterIsAdmin,
+          botUserId,
+          senderUserId,
+          targetSpaceName,
         );
       }
       case "help":
