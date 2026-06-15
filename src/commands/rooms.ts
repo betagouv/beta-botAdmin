@@ -143,16 +143,25 @@ async function isRoomMember(
   }
 }
 
-// Find a sub-space of the managed space whose name matches (case-insensitive).
+// Find a sub-space of the managed space by its room ID (`!id:server`) or by its
+// name (case-insensitive). The ID form lets callers target a space whose name is
+// ambiguous or contains spaces.
 async function resolveSubSpace(
   client: MatrixClient,
   managedSpaceId: string,
-  name: string,
+  idOrName: string,
 ): Promise<SpaceChild | null> {
   const children = await listChildren(client, managedSpaceId);
+  const needle = idOrName.toLowerCase();
+  // A room ID always starts with `!`; match by ID in that case, otherwise by name.
+  const byId = idOrName.startsWith("!");
   return (
     children.find(
-      (c) => c.isSpace && c.name.toLowerCase() === name.toLowerCase(),
+      (c) =>
+        c.isSpace &&
+        (byId
+          ? c.roomId.toLowerCase() === needle
+          : c.name.toLowerCase() === needle),
     ) ?? null
   );
 }
@@ -496,11 +505,11 @@ function helpMessage(): RoomCmdResult {
 |---|---|
 | \`/salon list\` | Liste les salons, groupés par espace |
 | \`/salon create <nom>\` | Crée un salon (chiffré), t'y invite, et le rattache à l'espace géré |
-| \`/salon create <nom> <espace>\` | Idem, mais rattache le salon au sous-espace **<espace>** |
+| \`/salon create <nom> <espace>\` | Idem, mais rattache le salon au sous-espace **<espace>** (nom ou ID) |
 | \`/salon delete <nom>\` | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
 | \`/salon delete <nom> <espace>\` | Idem, mais cible le salon situé dans le sous-espace **<espace>** (pour lever l'ambiguïté si le même nom existe ailleurs) |
 
-Le \`<nom>\` peut contenir des espaces (les guillemets sont optionnels). Le dernier mot n'est traité comme **<espace>** que s'il correspond à un sous-espace existant (voir \`/espace list\`).`,
+Le \`<nom>\` peut contenir des espaces (les guillemets sont optionnels). Le dernier mot n'est traité comme **<espace>** que s'il correspond au **nom ou à l'ID** d'un sous-espace existant (voir \`/espace list\`).`,
   };
 }
 

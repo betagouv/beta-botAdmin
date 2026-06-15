@@ -639,6 +639,30 @@ export class MatrixConnector {
       },
     );
 
+    // Diagnose departures: log whether the bot left on its own or was
+    // kicked/banned by someone, and by whom. `sender` performed the action,
+    // `state_key` is whose membership changed (here, the bot).
+    this.client.on(
+      "room.leave",
+      (roomId: string, event: Record<string, unknown>) => {
+        const ev = event as {
+          sender?: string;
+          state_key?: string;
+          content?: { membership?: string; reason?: string };
+        };
+        if (ev.state_key && ev.state_key !== this.ownUserId) return;
+        const by = ev.sender ?? "?";
+        const selfInitiated = by === this.ownUserId;
+        const action = ev.content?.membership === "ban" ? "BANNI" : "PARTI/KICK";
+        const reason = ev.content?.reason ? ` raison="${ev.content.reason}"` : "";
+        console.log(
+          `[Matrix] ⚠️ Bot ${action} de ${roomId} — par ${by} ${
+            selfInitiated ? "(LUI-MÊME / volontaire)" : "(SORTI PAR QUELQU'UN D'AUTRE)"
+          }${reason}`,
+        );
+      },
+    );
+
     this.client.on(
       "room.message",
       (roomId: string, event: Record<string, unknown>) => {
