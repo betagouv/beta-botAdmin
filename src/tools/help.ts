@@ -66,9 +66,21 @@ Je suis un bot **à commandes** : je ne discute pas en langage naturel. Je ne r�
 
 | Sous-commande | Qui | Description |
 |---|---|---|
-| \`/salon list\` | tout le monde | Liste les salons de l'espace géré |
-| \`/salon create <nom>\` | tout le monde | Crée un salon chiffré, t'y invite, et le rattache à l'espace |
-| \`/salon delete <nom>\` | modérateur+ du salon ciblé | Ferme le salon : détache de l'espace + expulse les membres + le bot quitte |
+| \`/salon list\` | tout le monde | Liste les salons, groupés par espace |
+| \`/salon create <nom>\` | tout le monde | Crée un salon chiffré, t'y invite, et le rattache à l'espace géré |
+| \`/salon create <nom> <espace>\` | tout le monde | Idem, mais rattache le salon au sous-espace **<espace>** (dernier mot = nom d'un sous-espace existant) |
+| \`/salon delete <nom>\` | modérateur+ du salon ciblé | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
+| \`/salon delete <nom> <espace>\` | modérateur+ du salon ciblé | Idem mais cible le salon dans le sous-espace **<espace>** (lève l'ambiguïté) |
+
+### \`/espace\` — gestion des sous-espaces
+- **Où** : ${cmdWhere}
+- **Espace géré** : ${managedSpace}
+
+| Sous-commande | Qui | Description |
+|---|---|---|
+| \`/espace list\` | tout le monde | Liste les sous-espaces de l'espace géré |
+| \`/espace create <nom>\` | tout le monde | Crée un sous-espace et le rattache à l'espace géré |
+| \`/espace delete <nom>\` | modérateur+ de l'espace | Supprime le(s) sous-espace(s) de ce nom (détache + expulse + le bot quitte) |
 
 ## Si quelque chose ne marche pas
 

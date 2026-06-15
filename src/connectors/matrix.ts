@@ -9,7 +9,7 @@ import {
 import { marked } from "marked";
 import { config } from "../config.js";
 import { handleEmailsCommand, senderEmailDomain } from "../commands/emails.js";
-import { handleRoomsCommand } from "../commands/rooms.js";
+import { handleRoomsCommand, handleSpacesCommand } from "../commands/rooms.js";
 import { record, query, formatHistory } from "../commands/history.js";
 import { buildCommandOnlyNotice } from "../commands/notice.js";
 import { buildHelp } from "../tools/help.js";
@@ -17,7 +17,7 @@ import { buildHelp } from "../tools/help.js";
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
 // out — it still works (handled explicitly below) but isn't advertised.
-const KNOWN_COMMANDS = ["/help", "/emails", "/salon"] as const;
+const KNOWN_COMMANDS = ["/help", "/emails", "/salon", "/espace"] as const;
 
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -914,7 +914,21 @@ export class MatrixConnector {
           config.matrix.managedSpace,
           this.ownUserId,
           sender,
-          config.matrix.adminUsers.includes(sender),
+          text,
+        );
+        await this.sendReaction(roomId, userEventId, result.reaction);
+        await this.sendMessage(roomId, result.message, userEventId, threadRoot);
+        const status: "ok" | "error" = result.reaction === "❌" || result.reaction === "⛔" ? "error" : "ok";
+        record({ user: sender, room: roomId, kind: "slash", text, status, detail: result.reaction });
+        return;
+      }
+
+      if (text === "/espace" || text.startsWith("/espace ")) {
+        const result = await handleSpacesCommand(
+          this.client,
+          config.matrix.managedSpace,
+          this.ownUserId,
+          sender,
           text,
         );
         await this.sendReaction(roomId, userEventId, result.reaction);
