@@ -35,6 +35,10 @@ export const config = {
     commandRooms: optionalList("MATRIX_COMMAND_ROOMS"),
     commandRoomsLabel: process.env["MATRIX_COMMAND_ROOMS_LABEL"],
     dimailRooms: optionalList("MATRIX_DIMAIL_ROOMS"),
+    // Rooms where `/help` returns the OPS-request help (how to make a demande
+    // d'OPS) and is open to everyone — even if the room is not in
+    // MATRIX_COMMAND_ROOMS. Comma-separated room IDs.
+    opsRooms: optionalList("MATRIX_OPS_ROOMS"),
     adminUsers: optionalList("MATRIX_ADMIN_USERS"),
     // Email domains allowed to run /emails. Tchap encodes the email in the mxid
     // localpart (`@prenom.nom-beta.gouv.fr:server`), so the gate matches the

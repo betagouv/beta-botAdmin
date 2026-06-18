@@ -12,7 +12,7 @@ import { handleEmailsCommand, senderEmailDomain } from "../commands/emails.js";
 import { handleRoomsCommand, handleSpacesCommand } from "../commands/rooms.js";
 import { record, query, formatHistory } from "../commands/history.js";
 import { buildCommandOnlyNotice } from "../commands/notice.js";
-import { buildHelp } from "../tools/help.js";
+import { buildHelp, buildOpsHelp } from "../tools/help.js";
 
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
@@ -829,6 +829,24 @@ export class MatrixConnector {
     }
 
     const userEventId = event.event_id as string;
+
+    // OPS rooms: ONLY `/help` (or `/aide`) works — it shows the OPS-request
+    // help, open to everyone. Every other message (other commands, mentions,
+    // natural language) is ignored silently. Checked before all dispatch.
+    if (config.matrix.opsRooms.includes(roomId)) {
+      const isHelp =
+        isSlashCommand &&
+        (text === "/help" ||
+          text === "/aide" ||
+          text.startsWith("/help ") ||
+          text.startsWith("/aide "));
+      if (isHelp) {
+        await this.sendReaction(roomId, userEventId, "📖");
+        await this.sendMessage(roomId, buildOpsHelp(), userEventId, threadRoot);
+        record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "ops-help" });
+      }
+      return;
+    }
 
     if (isSlashCommand) {
       const commandRooms = config.matrix.commandRooms;
