@@ -721,7 +721,12 @@ export class MatrixConnector {
     const eventTs = event.origin_server_ts as number | undefined;
     if (eventTs !== undefined && eventTs < this.startupTs) return;
 
+    // DMs always bypass the allowed-rooms filter: a 1:1 room is never in
+    // MATRIX_ALLOWED_ROOMS, so without this exemption the bot would never reply
+    // in private. The room filter only gates group rooms.
+    const isDM = await this.isDMRoom(roomId);
     if (
+      !isDM &&
       config.matrix.allowedRooms.length > 0 &&
       !config.matrix.allowedRooms.includes(roomId)
     ) {
@@ -741,7 +746,6 @@ export class MatrixConnector {
 
     const body = content.body ?? "";
     const formattedBody = content.formatted_body ?? "";
-    const isDM = await this.isDMRoom(roomId);
     const localPart = this.ownUserId
       ? (this.ownUserId.replace(/@/, "").split(":")[0] ?? "")
       : "";
@@ -751,9 +755,27 @@ export class MatrixConnector {
     // the bot's name by hand (no pill) would trigger commands — the plain `body`
     // of a real pill is identical to hand-typed text, so it can't be trusted.
     const mentionUserIds = content["m.mentions"]?.user_ids ?? [];
+    // Names a typed plain-text "@name" must match EXACTLY (case-insensitive) to
+    // count as a mention: the full localpart, the full display name, and the
+    // first alphanumeric run of each (e.g. localpart "betabotadmin-beta.gouv.fr"
+    // and display name "Betabot+admin [Beta]" both yield the root "betabot", so
+    // typing exactly "@betabot" is a mention). Prefixes like "@beta" do NOT
+    // match — exact equality avoids false positives from incidental "@beta" text.
+    const firstRun = (s: string): string =>
+      s.toLowerCase().match(/^[\p{L}\p{N}]+/u)?.[0] ?? s.toLowerCase();
+    const mentionNames = [localPart, this.ownDisplayName]
+      .filter((p): p is string => !!p)
+      .flatMap((name) => [name.toLowerCase(), firstRun(name)]);
+    const matchesBotToken = (token: string): boolean =>
+      mentionNames.includes(token.toLowerCase());
+    const atTokens = (
+      body.toLowerCase().match(/@[\p{L}\p{N}._+-]+/gu) ?? []
+    ).map((t) => t.slice(1));
+    const hasTextMention = atTokens.some(matchesBotToken);
     const isMentioned = this.ownUserId
       ? formattedBody.includes(this.ownUserId) ||
-        mentionUserIds.includes(this.ownUserId)
+        mentionUserIds.includes(this.ownUserId) ||
+        hasTextMention
       : false;
 
     const relates = (event.content as Record<string, unknown>)?.[
@@ -778,7 +800,9 @@ export class MatrixConnector {
       const lower = s.toLowerCase();
       const patterns = [
         this.ownUserId,
+        localPart ? `@${localPart}` : undefined,
         localPart,
+        this.ownDisplayName ? `@${this.ownDisplayName}` : undefined,
         this.ownDisplayName,
       ].filter((p): p is string => !!p);
       for (const pat of patterns) {
@@ -788,6 +812,14 @@ export class MatrixConnector {
             matched: true,
           };
         }
+      }
+      // Exact typed "@token" (e.g. "@betabot") at the very start.
+      const leading = s.match(/^@[\p{L}\p{N}._+-]+/u);
+      if (leading && matchesBotToken(leading[0].slice(1))) {
+        return {
+          text: s.slice(leading[0].length).replace(/^[\s,:;]+/, ""),
+          matched: true,
+        };
       }
       return { text: s, matched: false };
     };
@@ -854,7 +886,9 @@ export class MatrixConnector {
         await this.sendReaction(roomId, userEventId, "⛔");
         const cmd = text.split(/\s+/)[0] || "/?";
         const where = config.matrix.commandRoomsLabel
-          ? `\`${config.matrix.commandRoomsLabel}\``
+          ? config.matrix.commandRoomsUrl
+            ? `[${config.matrix.commandRoomsLabel}](${config.matrix.commandRoomsUrl})`
+            : `\`${config.matrix.commandRoomsLabel}\``
           : commandRooms.map((r) => `\`${r}\``).join(", ");
         await this.sendMessage(
           roomId,
@@ -1003,6 +1037,7 @@ export class MatrixConnector {
       buildCommandOnlyNotice({
         commandRooms: config.matrix.commandRooms,
         commandRoomsLabel: config.matrix.commandRoomsLabel,
+        commandRoomsUrl: config.matrix.commandRoomsUrl,
         contact: config.matrix.contact,
         commands: KNOWN_COMMANDS,
       }),

@@ -6,6 +6,7 @@
 export interface CommandOnlyNoticeOptions {
   commandRooms: string[];
   commandRoomsLabel: string | undefined;
+  commandRoomsUrl: string | undefined;
   contact: string | undefined;
   commands: readonly string[];
 }
@@ -13,11 +14,14 @@ export interface CommandOnlyNoticeOptions {
 export function buildCommandOnlyNotice({
   commandRooms,
   commandRoomsLabel,
+  commandRoomsUrl,
   contact,
   commands,
 }: CommandOnlyNoticeOptions): string {
   const where = commandRoomsLabel
-    ? `\`${commandRoomsLabel}\``
+    ? commandRoomsUrl
+      ? `[${commandRoomsLabel}](${commandRoomsUrl})`
+      : `\`${commandRoomsLabel}\``
     : commandRooms.length > 0
       ? commandRooms.map((r) => `\`${r}\``).join(", ")
       : "le salon dédié aux commandes";

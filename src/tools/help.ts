@@ -46,7 +46,9 @@ Chaque type a aussi un champ **Commentaires** (libre).
 function buildBotHelp(): string {
   const cmdRooms = config.matrix.commandRooms;
   const cmdWhere = config.matrix.commandRoomsLabel
-    ? `\`${config.matrix.commandRoomsLabel}\``
+    ? config.matrix.commandRoomsUrl
+      ? `[${config.matrix.commandRoomsLabel}](${config.matrix.commandRoomsUrl})`
+      : `\`${config.matrix.commandRoomsLabel}\``
     : cmdRooms.length > 0
       ? cmdRooms.map((r) => `\`${r}\``).join(", ")
       : "(aucune restriction, partout)";
