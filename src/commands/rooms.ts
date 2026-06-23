@@ -205,10 +205,14 @@ async function createRoom(
   for (const u of invitees) users[u] = MODERATOR_POWER_LEVEL;
 
   const spaceVia = serverName(spaceId);
+  // Synapse force le chiffrement sur les salons privés (config serveur
+  // `encryption_enabled_by_default_for_room_type`). Un salon `--clair` doit
+  // donc être créé en public pour rester réellement non chiffré ; sinon le
+  // serveur ré-active le chiffrement malgré l'absence de m.room.encryption.
   const roomId = await client.createRoom({
     name,
-    preset: "private_chat",
-    visibility: "private",
+    preset: encrypted ? "private_chat" : "public_chat",
+    visibility: encrypted ? "private" : "public",
     invite: invitees,
     power_level_content_override: { users },
     initial_state: [
@@ -279,7 +283,7 @@ async function createRoom(
 
   return {
     reaction: "✅",
-    message: `🏠 Salon **${name}** créé (${encrypted ? "chiffré" : "non chiffré"}) et rattaché à ${where}.\nID : \`${roomId}\``,
+    message: `🏠 Salon **${name}** créé (${encrypted ? "privé, chiffré" : "public, non chiffré"}) et rattaché à ${where}.\nID : \`${roomId}\``,
   };
 }
 
