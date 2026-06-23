@@ -173,6 +173,7 @@ async function createRoom(
   inviteUserId: string,
   botUserId: string,
   spaceLabel?: string | null,
+  encrypted = true,
 ): Promise<RoomCmdResult> {
   const where = spaceLabel ? `l'espace **${spaceLabel}**` : "l'espace géré";
   const existing = await listChildren(client, spaceId);
@@ -216,11 +217,18 @@ async function createRoom(
         state_key: spaceId,
         content: { via: [spaceVia], canonical: true },
       },
-      {
-        type: "m.room.encryption",
-        state_key: "",
-        content: { algorithm: "m.megolm.v1.aes-sha2" },
-      },
+      // Encryption is enabled by default. Skipped when `--clair` is passed so
+      // the room stays unencrypted (cleartext). Encryption can't be undone once
+      // turned on, so it's opt-out at creation rather than toggled later.
+      ...(encrypted
+        ? [
+            {
+              type: "m.room.encryption",
+              state_key: "",
+              content: { algorithm: "m.megolm.v1.aes-sha2" },
+            },
+          ]
+        : []),
     ],
   });
 
@@ -271,7 +279,7 @@ async function createRoom(
 
   return {
     reaction: "✅",
-    message: `🏠 Salon **${name}** créé et rattaché à ${where}.\nID : \`${roomId}\``,
+    message: `🏠 Salon **${name}** créé (${encrypted ? "chiffré" : "non chiffré"}) et rattaché à ${where}.\nID : \`${roomId}\``,
   };
 }
 
@@ -505,6 +513,7 @@ function helpMessage(): RoomCmdResult {
 |---|---|
 | \`/salon list\` | Liste les salons, groupés par espace |
 | \`/salon create <nom>\` | Crée un salon (chiffré), t'y invite, et le rattache à l'espace géré |
+| \`/salon create <nom> --clair\` | Idem mais salon **non chiffré** (le chiffrement ne peut pas être retiré ensuite) |
 | \`/salon create <nom> <espace>\` | Idem, mais rattache le salon au sous-espace **<espace>** (nom ou ID) |
 | \`/salon delete <nom>\` | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
 | \`/salon delete <nom> <espace>\` | Idem, mais cible le salon situé dans le sous-espace **<espace>** (pour lever l'ambiguïté si le même nom existe ailleurs) |
@@ -627,15 +636,29 @@ export async function handleRoomsCommand(
         if (!arg)
           return {
             reaction: "❌",
-            message: "❌ Usage : `/salon create <nom> [espace]`",
+            message: "❌ Usage : `/salon create <nom> [espace] [--clair]`",
+          };
+        // `--clair` (anywhere in the args) creates an unencrypted room. Strip
+        // the flag out before parsing name/espace so it never lands in either.
+        const tokensRaw = arg.split(/\s+/);
+        const encrypted = !tokensRaw.some(
+          (t) => t.toLowerCase() === "--clair",
+        );
+        const cleaned = tokensRaw
+          .filter((t) => t.toLowerCase() !== "--clair")
+          .join(" ");
+        if (!cleaned)
+          return {
+            reaction: "❌",
+            message: "❌ Usage : `/salon create <nom> [espace] [--clair]`",
           };
         // Optional target espace = last word, but only when it names an
         // existing sub-space. Otherwise the whole arg is the room name and the
         // room is attached to the managed space (backward compatible).
-        const tokens = arg.split(/\s+/);
+        const tokens = cleaned.split(/\s+/);
         let targetSpaceId = spaceId;
         let targetSpaceName: string | null = null;
-        let roomName = arg;
+        let roomName = cleaned;
         if (tokens.length >= 2) {
           const sub2 = await resolveSubSpace(
             client,
@@ -666,6 +689,7 @@ export async function handleRoomsCommand(
           senderUserId,
           botUserId,
           targetSpaceName,
+          encrypted,
         );
       }
       case "delete":
