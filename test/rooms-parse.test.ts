@@ -18,6 +18,17 @@ test("parseRoomAndSpace: single-quoted trailing segment also works", () => {
   });
 });
 
+test("parseRoomAndSpace: double-quoted espace may contain an apostrophe", () => {
+  assert.deepEqual(
+    parseRoomAndSpace('test-chan2 "Fabrique numérique de l\'écologie"'),
+    {
+      roomName: "test-chan2",
+      spaceCandidate: "Fabrique numérique de l'écologie",
+      explicit: true,
+    },
+  );
+});
+
 test("parseRoomAndSpace: a wholly quoted value is the room name, no espace", () => {
   assert.deepEqual(parseRoomAndSpace('"mon salon"'), {
     roomName: "mon salon",

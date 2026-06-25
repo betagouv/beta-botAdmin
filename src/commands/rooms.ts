@@ -179,17 +179,20 @@ export function parseRoomAndSpace(cleaned: string): {
   spaceCandidate: string | null;
   explicit: boolean;
 } {
-  const trailing = cleaned.match(/^(.*\S)\s+["']([^"']+)["']$/);
+  // Opening and closing quote must be the SAME type (backref `\2`) so the
+  // content can itself contain the other quote — notably an apostrophe inside a
+  // double-quoted espace, e.g. `"Fabrique numérique de l'écologie"`.
+  const trailing = cleaned.match(/^(.*\S)\s+(["'])(.+)\2$/);
   if (trailing) {
     return {
       roomName: trailing[1]!.trim(),
-      spaceCandidate: trailing[2]!.trim(),
+      spaceCandidate: trailing[3]!.trim(),
       explicit: true,
     };
   }
-  const whole = cleaned.match(/^["']([^"']+)["']$/);
+  const whole = cleaned.match(/^(["'])(.+)\1$/);
   if (whole) {
-    return { roomName: whole[1]!.trim(), spaceCandidate: null, explicit: false };
+    return { roomName: whole[2]!.trim(), spaceCandidate: null, explicit: false };
   }
   const tokens = cleaned.split(/\s+/);
   if (tokens.length >= 2) {
