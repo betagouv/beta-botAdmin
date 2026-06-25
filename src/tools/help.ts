@@ -114,9 +114,9 @@ Je suis un bot **à commandes** : je ne discute pas en langage naturel. Je ne r�
 | \`/salon list\` | tout le monde | Liste les salons, groupés par espace |
 | \`/salon create <nom>\` | tout le monde | Crée un salon chiffré, t'y invite, et le rattache à l'espace géré |
 | \`/salon create <nom> --clair\` | tout le monde | Idem mais salon **non chiffré** (le chiffrement ne peut pas être retiré ensuite) |
-| \`/salon create <nom> <espace>\` | tout le monde | Idem, mais rattache le salon au sous-espace **<espace>** (dernier mot = nom **ou** ID d'un sous-espace existant) |
+| \`/salon create <nom> <espace>\` | tout le monde | Idem, mais rattache le salon au sous-espace **<espace>** (nom **ou** ID). Nom avec espaces : entre guillemets, ex. \`/salon create <nom> "Pole Tech"\` |
 | \`/salon delete <nom>\` | modérateur+ du salon ciblé | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
-| \`/salon delete <nom> <espace>\` | modérateur+ du salon ciblé | Idem mais cible le salon dans le sous-espace **<espace>** (lève l'ambiguïté) |
+| \`/salon delete <nom> <espace>\` | modérateur+ du salon ciblé | Idem mais cible le salon dans le sous-espace **<espace>** (lève l'ambiguïté ; espace avec espaces = entre guillemets) |
 
 ### \`/espace\` — gestion des sous-espaces
 - **Où** : ${cmdWhere}
@@ -126,7 +126,6 @@ Je suis un bot **à commandes** : je ne discute pas en langage naturel. Je ne r�
 |---|---|---|
 | \`/espace list\` | tout le monde | Liste les sous-espaces de l'espace géré |
 | \`/espace create <nom>\` | tout le monde | Crée un sous-espace et le rattache à l'espace géré |
-| \`/espace delete <nom>\` | modérateur+ de l'espace | Supprime le(s) sous-espace(s) de ce nom (détache + expulse + le bot quitte) |
 
 ## Si quelque chose ne marche pas
 

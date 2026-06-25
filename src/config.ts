@@ -2,11 +2,6 @@ function optional(name: string, fallback: string): string {
   return process.env[name] ?? fallback;
 }
 
-function optionalInt(name: string, fallback: number): number {
-  const val = process.env[name];
-  return val ? parseInt(val, 10) : fallback;
-}
-
 function optionalList(name: string): string[] {
   const val = process.env[name];
   if (!val) return [];
@@ -17,13 +12,6 @@ function optionalList(name: string): string[] {
 }
 
 export const config = {
-  openai: {
-    baseUrl: optional("OPENAI_BASE_URL", "http://localhost:11434/v1"),
-    apiKey: optional("OPENAI_API_KEY", "ollama"),
-    model: optional("OPENAI_MODEL", "qwen2.5:14b"),
-    embedModel: optional("OPENAI_EMBED_MODEL", "nomic-embed-text"),
-    embedDims: optionalInt("EMBED_DIMS", 768),
-  },
   dataDir: optional("DATA_DIR", "./data"),
   matrix: {
     homeserver: process.env["MATRIX_HOMESERVER"],

@@ -114,9 +114,3 @@ npm run start    # production (compiled JS)
 npm run build   # outputs to dist/
 npm run start
 ```
-
----
-
-## Note on the legacy LLM stack
-
-This repo also contains a **dormant** natural-language/LLM stack (orchestrator, search tools, embeddings, the `npm run cli`/`npm run embed`/`npm run eval` scripts and `get-data.sh`). It is **no longer wired into the bot** — the bot is command-only. These files are kept for reference and are not needed to build or run betabot.

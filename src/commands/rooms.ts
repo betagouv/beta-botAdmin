@@ -166,6 +166,42 @@ async function resolveSubSpace(
   );
 }
 
+// Parse a `<nom> [espace]` argument into a room name and an optional target
+// espace. A **quoted** trailing segment is always the espace, so names that
+// contain spaces work (e.g. `Mon Salon "Pole Tech"`). A single quoted value
+// with nothing before it is the room name (`"mon salon"`). Otherwise the last
+// bare word is a candidate espace, kept for backward compatibility — the caller
+// only uses it when it actually resolves to an existing sub-space.
+// `explicit` = the espace came from quotes, so the caller must error (not fall
+// back to a room name) when it doesn't resolve.
+export function parseRoomAndSpace(cleaned: string): {
+  roomName: string;
+  spaceCandidate: string | null;
+  explicit: boolean;
+} {
+  const trailing = cleaned.match(/^(.*\S)\s+["']([^"']+)["']$/);
+  if (trailing) {
+    return {
+      roomName: trailing[1]!.trim(),
+      spaceCandidate: trailing[2]!.trim(),
+      explicit: true,
+    };
+  }
+  const whole = cleaned.match(/^["']([^"']+)["']$/);
+  if (whole) {
+    return { roomName: whole[1]!.trim(), spaceCandidate: null, explicit: false };
+  }
+  const tokens = cleaned.split(/\s+/);
+  if (tokens.length >= 2) {
+    return {
+      roomName: cleaned,
+      spaceCandidate: tokens[tokens.length - 1]!,
+      explicit: false,
+    };
+  }
+  return { roomName: cleaned, spaceCandidate: null, explicit: false };
+}
+
 async function createRoom(
   client: MatrixClient,
   spaceId: string,
@@ -346,51 +382,6 @@ async function createSpace(
   };
 }
 
-// Delete sub-space(s) of the managed space matching a name. Because duplicates
-// can exist (e.g. two bots created the same space), every match is removed.
-async function deleteSpace(
-  client: MatrixClient,
-  managedSpaceId: string,
-  name: string,
-  botUserId: string,
-  requesterUserId: string,
-): Promise<RoomCmdResult> {
-  const spaces = (await listChildren(client, managedSpaceId)).filter(
-    (c) => c.isSpace && c.name.toLowerCase() === name.toLowerCase(),
-  );
-  if (!spaces.length) {
-    return {
-      reaction: "❌",
-      message: `❌ Aucun espace nommé **${name}**. Tape \`/espace list\`.`,
-    };
-  }
-
-  let closed = 0;
-  let denied = 0;
-  for (const sp of spaces) {
-    // Requester must be moderator+ in the space (bot itself is exempt).
-    const level = await powerLevelOf(client, sp.roomId, requesterUserId);
-    if (requesterUserId !== botUserId && level < MODERATOR_POWER_LEVEL) {
-      denied++;
-      continue;
-    }
-    await detachAndClose(client, managedSpaceId, sp.roomId, botUserId);
-    closed++;
-  }
-
-  if (closed === 0) {
-    return {
-      reaction: "⛔",
-      message: `⛔ Tu dois être **modérateur ou plus** (niveau ≥ ${MODERATOR_POWER_LEVEL}) dans **${name}** pour le supprimer.`,
-    };
-  }
-  const extra = denied ? ` (${denied} ignoré(s) faute de droits)` : "";
-  return {
-    reaction: "✅",
-    message: `🗑 ${closed} espace(s) **${name}** supprimé(s) : détaché(s) de l'espace géré + membres expulsés + le bot a quitté${extra}.`,
-  };
-}
-
 // Requester's power level in a room (users[id] → users_default → 0).
 async function powerLevelOf(
   client: MatrixClient,
@@ -518,11 +509,11 @@ function helpMessage(): RoomCmdResult {
 | \`/salon list\` | Liste les salons, groupés par espace |
 | \`/salon create <nom>\` | Crée un salon (chiffré), t'y invite, et le rattache à l'espace géré |
 | \`/salon create <nom> --clair\` | Idem mais salon **non chiffré** (le chiffrement ne peut pas être retiré ensuite) |
-| \`/salon create <nom> <espace>\` | Idem, mais rattache le salon au sous-espace **<espace>** (nom ou ID) |
+| \`/salon create <nom> <espace>\` | Idem, mais rattache le salon au sous-espace **<espace>** (nom ou ID). Si le nom de l'espace contient des espaces, mets-le entre guillemets : \`/salon create <nom> "Pole Tech"\` |
 | \`/salon delete <nom>\` | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
-| \`/salon delete <nom> <espace>\` | Idem, mais cible le salon situé dans le sous-espace **<espace>** (pour lever l'ambiguïté si le même nom existe ailleurs) |
+| \`/salon delete <nom> <espace>\` | Idem, mais cible le salon situé dans le sous-espace **<espace>** (pour lever l'ambiguïté si le même nom existe ailleurs). Espace avec des espaces : entre guillemets |
 
-Le \`<nom>\` peut contenir des espaces (les guillemets sont optionnels). Le dernier mot n'est traité comme **<espace>** que s'il correspond au **nom ou à l'ID** d'un sous-espace existant (voir \`/espace list\`).`,
+Le \`<nom>\` peut contenir des espaces. Pour cibler un **<espace>** dont le nom contient des espaces, mets-le entre guillemets en dernier (\`"Pole Tech"\`) ; sinon le dernier mot est traité comme **<espace>** seulement s'il correspond au **nom ou à l'ID** d'un sous-espace existant (voir \`/espace list\`).`,
   };
 }
 
@@ -535,7 +526,6 @@ function spacesHelpMessage(): RoomCmdResult {
 |---|---|
 | \`/espace list\` | Liste les sous-espaces de l'espace géré |
 | \`/espace create <nom>\` | Crée un sous-espace et le rattache à l'espace géré |
-| \`/espace delete <nom>\` | Supprime le(s) sous-espace(s) de ce nom (modérateur+ requis) |
 
 Ensuite, range un salon dedans : \`/salon create <nom-salon> <nom-espace>\`.`,
   };
@@ -579,21 +569,6 @@ export async function handleSpacesCommand(
           senderUserId,
           botUserId,
         );
-      case "delete":
-      case "close":
-      case "supprimer":
-        if (!arg)
-          return {
-            reaction: "❌",
-            message: "❌ Usage : `/espace delete <nom>`",
-          };
-        return await deleteSpace(
-          client,
-          managedSpaceId,
-          arg,
-          botUserId,
-          senderUserId,
-        );
       case "help":
       case "aide":
         return spacesHelpMessage();
@@ -629,7 +604,10 @@ export async function handleRoomsCommand(
 
   const m = text.trim().match(/^\/salon\s+(\S+)\s*([\s\S]*)$/i);
   const sub = (m?.[1] ?? "help").toLowerCase();
-  const arg = (m?.[2] ?? "").trim().replace(/^["']|["']$/g, "").trim();
+  // Raw argument, NOT wrapping-quote-stripped: create/delete parse trailing
+  // quotes themselves (a quoted espace can contain spaces), so stripping the
+  // outer quote here would corrupt `<nom> "<espace>"`.
+  const rawArg = (m?.[2] ?? "").trim();
 
   try {
     switch (sub) {
@@ -637,14 +615,14 @@ export async function handleRoomsCommand(
         return await listRooms(client, spaceId);
       case "create":
       case "new": {
-        if (!arg)
+        if (!rawArg)
           return {
             reaction: "❌",
-            message: "❌ Usage : `/salon create <nom> [espace] [--clair]`",
+            message: "❌ Usage : `/salon create <nom> [\"espace\"] [--clair]`",
           };
         // `--clair` (anywhere in the args) creates an unencrypted room. Strip
         // the flag out before parsing name/espace so it never lands in either.
-        const tokensRaw = arg.split(/\s+/);
+        const tokensRaw = rawArg.split(/\s+/);
         const encrypted = !tokensRaw.some(
           (t) => t.toLowerCase() === "--clair",
         );
@@ -654,21 +632,15 @@ export async function handleRoomsCommand(
         if (!cleaned)
           return {
             reaction: "❌",
-            message: "❌ Usage : `/salon create <nom> [espace] [--clair]`",
+            message: "❌ Usage : `/salon create <nom> [\"espace\"] [--clair]`",
           };
-        // Optional target espace = last word, but only when it names an
-        // existing sub-space. Otherwise the whole arg is the room name and the
-        // room is attached to the managed space (backward compatible).
-        const tokens = cleaned.split(/\s+/);
+        const { roomName: parsedName, spaceCandidate, explicit } =
+          parseRoomAndSpace(cleaned);
         let targetSpaceId = spaceId;
         let targetSpaceName: string | null = null;
-        let roomName = cleaned;
-        if (tokens.length >= 2) {
-          const sub2 = await resolveSubSpace(
-            client,
-            spaceId,
-            tokens[tokens.length - 1]!,
-          );
+        let roomName = parsedName;
+        if (spaceCandidate) {
+          const sub2 = await resolveSubSpace(client, spaceId, spaceCandidate);
           if (sub2) {
             // Only members of the target espace may create rooms inside it.
             // The bot itself (self command) is exempt.
@@ -683,9 +655,24 @@ export async function handleRoomsCommand(
             }
             targetSpaceId = sub2.roomId;
             targetSpaceName = sub2.name;
-            roomName = tokens.slice(0, -1).join(" ");
+            // Bare last-word match: drop that word from the room name. (Quoted
+            // espace already gave us the prefix as `parsedName`.)
+            if (!explicit)
+              roomName = cleaned.split(/\s+/).slice(0, -1).join(" ");
+          } else if (explicit) {
+            // Quoted espace that doesn't exist: don't silently turn it into a
+            // room name — the intent was explicit.
+            return {
+              reaction: "❌",
+              message: `❌ Espace introuvable : **${spaceCandidate}**. Tape \`/espace list\` pour voir les sous-espaces.`,
+            };
           }
         }
+        if (!roomName)
+          return {
+            reaction: "❌",
+            message: "❌ Usage : `/salon create <nom> [\"espace\"] [--clair]`",
+          };
         return await createRoom(
           client,
           targetSpaceId,
@@ -699,28 +686,31 @@ export async function handleRoomsCommand(
       case "delete":
       case "close":
       case "supprimer": {
-        if (!arg)
+        if (!rawArg)
           return {
             reaction: "❌",
-            message: "❌ Usage : `/salon delete <nom> [espace]`",
+            message: "❌ Usage : `/salon delete <nom> [\"espace\"]`",
           };
-        // Same scoping as create: trailing word selects the sub-space to look
-        // in, but only when it names an existing one. Disambiguates a room name
-        // that exists in several espaces.
-        const tokensD = arg.split(/\s+/);
+        // Same scoping as create: a quoted trailing segment (or a bare last word
+        // that names an existing sub-space) selects the espace to look in.
+        // Disambiguates a room name that exists in several espaces.
+        const { roomName: parsedName, spaceCandidate, explicit } =
+          parseRoomAndSpace(rawArg);
         let targetSpaceId = spaceId;
         let targetSpaceName: string | null = null;
-        let roomName = arg;
-        if (tokensD.length >= 2) {
-          const subD = await resolveSubSpace(
-            client,
-            spaceId,
-            tokensD[tokensD.length - 1]!,
-          );
+        let roomName = parsedName;
+        if (spaceCandidate) {
+          const subD = await resolveSubSpace(client, spaceId, spaceCandidate);
           if (subD) {
             targetSpaceId = subD.roomId;
             targetSpaceName = subD.name;
-            roomName = tokensD.slice(0, -1).join(" ");
+            if (!explicit)
+              roomName = rawArg.split(/\s+/).slice(0, -1).join(" ");
+          } else if (explicit) {
+            return {
+              reaction: "❌",
+              message: `❌ Espace introuvable : **${spaceCandidate}**. Tape \`/espace list\` pour voir les sous-espaces.`,
+            };
           }
         }
         return await closeRoom(

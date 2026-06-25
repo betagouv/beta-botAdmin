@@ -746,6 +746,17 @@ export class MatrixConnector {
 
     const body = content.body ?? "";
     const formattedBody = content.formatted_body ?? "";
+    // matrix.to pill links percent-encode reserved localpart chars (e.g. `+` →
+    // `%2B`), so a raw `includes(ownUserId)` misses the mention when the bot's
+    // MXID contains them. Decode before comparing; fall back to raw on malformed
+    // escapes.
+    const decodedFormattedBody = (() => {
+      try {
+        return decodeURIComponent(formattedBody);
+      } catch {
+        return formattedBody;
+      }
+    })();
     const localPart = this.ownUserId
       ? (this.ownUserId.replace(/@/, "").split(":")[0] ?? "")
       : "";
@@ -773,7 +784,7 @@ export class MatrixConnector {
     ).map((t) => t.slice(1));
     const hasTextMention = atTokens.some(matchesBotToken);
     const isMentioned = this.ownUserId
-      ? formattedBody.includes(this.ownUserId) ||
+      ? decodedFormattedBody.includes(this.ownUserId) ||
         mentionUserIds.includes(this.ownUserId) ||
         hasTextMention
       : false;

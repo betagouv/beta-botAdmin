@@ -8,28 +8,18 @@
     "build": "tsc",
     "dev": "node --env-file=.env --import tsx src/index.ts",
     "start": "node --env-file=.env dist/src/index.js",
-    "cli": "node --env-file=.env --import tsx src/cli.ts",
     "test": "NODE_OPTIONS='--import tsx' node --test test/*.test.ts"
   },
   "dependencies": {
     "esbuild-wasm": "^0.28.0",
-    "gray-matter": "^4",
-    "ical": "^0.8",
     "marked": "^18.0.4",
     "matrix-bot-sdk": "github:element-hq/matrix-bot-sdk#0.9.0-element.0",
-    "openai": "^4",
-    "remark-frontmatter": "^5",
-    "remark-parse": "^11",
-    "remark-stringify": "^11",
-    "tsx": "^4",
-    "unified": "^11",
-    "wink-bm25-text-search": "^2"
+    "tsx": "^4"
   },
   "optionalDependencies": {
     "@matrix-org/olm": "^3.2.15"
   },
   "devDependencies": {
-    "@types/ical": "^0.8.3",
     "@types/node": "^20",
     "typescript": "^5"
   },
