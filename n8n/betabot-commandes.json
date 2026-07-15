@@ -1,0 +1,239 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "betabot-liste-membre",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "37ca5c4d-34cc-4d67-858b-c326c9480356",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-320, 0],
+      "webhookId": "betabot-liste-membre",
+      "credentials": {
+        "httpHeaderAuth": { "id": "zrKuOJRBtkyYiA5N", "name": "X-Betabot-Secret" }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Corps envoyé par le bot.\nconst body = $json.body ?? $json;\nconst text = String(body.text ?? '');\nlet command = (text.trim().split(/\\s+/)[0] || '').toLowerCase();\nif (command === '/liste-membres') command = '/liste-membre';\nconst args = text.replace(/^\\/\\S+\\s*/, '').trim();\nreturn [{ json: {\n  command,\n  args,\n  text,\n  sender: body.sender ?? '',\n  roomId: body.roomId ?? '',\n  isDM: body.isDM ?? false,\n  managedSpace: body.managedSpace ?? '',\n  // Champs /invite (le bot a déjà résolu la cible).\n  liste: body.liste ?? '',\n  targetRoomId: body.targetRoomId ?? '',\n  targetLabel: body.targetLabel ?? '',\n  homeserver: String(body.homeserver ?? '').replace(/\\/$/, ''),\n} }];"
+      },
+      "id": "c7e573ee-0369-4cec-87eb-f74da34f26cb",
+      "name": "Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-96, 0]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+                "conditions": [
+                  { "leftValue": "={{ $json.command }}", "rightValue": "/liste-membre", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "liste-membre"
+            },
+            {
+              "conditions": {
+                "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose" },
+                "conditions": [
+                  { "leftValue": "={{ $json.command }}", "rightValue": "/invite", "operator": { "type": "string", "operation": "equals" } }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "invite"
+            }
+          ]
+        },
+        "options": { "fallbackOutput": "extra", "renameFallbackOutput": "autre" }
+      },
+      "id": "aaaa1111-2222-3333-4444-555566667777",
+      "name": "Switch commande",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [128, 0]
+    },
+
+    {
+      "parameters": {
+        "url": "https://grist.numerique.gouv.fr/api/docs/iJJ59y2H6ZwE91LEs1GoR4/tables/Membres/records",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBearerAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filter", "value": "={{ JSON.stringify({ Liste: [ ($json.args || '').replace(/^[\"']|[\"']$/g, '') ] }) }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "7a44f291-0c03-4a8b-9801-560eeddcc0c7",
+      "name": "Grist - liste-membre",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, -200],
+      "credentials": { "httpBearerAuth": { "id": "h32uPcKK6PXQuSD1", "name": "GRIST OPS" } }
+    },
+    {
+      "parameters": {
+        "jsCode": "const records = $json.records ?? [];\nconst noms = records.map(r => {\n  const f = r.fields ?? {};\n  const nom = String(f.Nom ?? '').trim();\n  const mxid = String(f.MatrixUserId ?? '').trim();\n  const fb = mxid.replace(/^@/, '').split(':')[0] ?? mxid;\n  return { nom: nom || fb, mxid };\n}).filter(m => m.mxid.length > 0);\nconst liste = String($('Parse').item.json.args || '').replace(/^[\"']|[\"']$/g, '');\nlet message, reaction;\nif (!liste) { message = '❌ Usage : `/liste-membre <nom>`'; reaction = '❌'; }\nelse if (noms.length === 0) { message = `📭 Aucune liste **${liste}** (ou elle est vide).`; reaction = '📭'; }\nelse { message = `📋 Liste **${liste}** (${noms.length} membre${noms.length > 1 ? 's' : ''}) : ${noms.map(m => m.nom).join(', ')}`; reaction = '📋'; }\nreturn [{ json: { message, reaction } }];"
+      },
+      "id": "a5ab6ad9-3608-4b58-8b77-303a6563f118",
+      "name": "Format liste-membre",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [624, -200]
+    },
+
+    {
+      "parameters": {
+        "url": "https://grist.numerique.gouv.fr/api/docs/iJJ59y2H6ZwE91LEs1GoR4/tables/Membres/records",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBearerAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "filter", "value": "={{ JSON.stringify({ Liste: [ $json.liste ] }) }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d1000000-0000-0000-0000-000000000001",
+      "name": "Grist - invite",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 120],
+      "credentials": { "httpBearerAuth": { "id": "h32uPcKK6PXQuSD1", "name": "GRIST OPS" } }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "typeValidation": "loose" },
+          "conditions": [
+            { "leftValue": "={{ ($json.records || []).length }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d1000000-0000-0000-0000-000000000002",
+      "name": "Des membres ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [624, 120]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Un item par membre à inviter.\nconst records = $json.records ?? [];\nconst p = $('Parse').item.json;\nreturn records\n  .map(r => String((r.fields ?? {}).MatrixUserId ?? '').trim())\n  .filter(Boolean)\n  .map(mxid => ({ json: { mxid, targetRoomId: p.targetRoomId, homeserver: p.homeserver } }));"
+      },
+      "id": "d1000000-0000-0000-0000-000000000003",
+      "name": "Membres -> items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [848, 40]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.homeserver }}/_matrix/client/v3/rooms/{{ encodeURIComponent($json.targetRoomId) }}/invite",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"user_id\": $json.mxid } }}",
+        "options": {}
+      },
+      "id": "d1000000-0000-0000-0000-000000000004",
+      "name": "Inviter (Matrix)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1072, 40],
+      "credentials": { "httpBearerAuth": { "id": "REMPLACE", "name": "Matrix Bot Token" } },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compte succès / déjà présent / échec.\nconst items = $input.all();\nlet invited = 0, already = 0, failed = 0;\nfor (const it of items) {\n  const j = it.json ?? {};\n  const err = j.error;\n  if (err) {\n    const msg = String((err && (err.message || err.reason)) || JSON.stringify(err));\n    if (/already|forbidden|M_FORBIDDEN/i.test(msg)) already++; else failed++;\n  } else invited++;\n}\nconst p = $('Parse').item.json;\nconst parts = [`✅ ${invited} invité(s) dans ${p.targetLabel || 'le salon'}`];\nif (already) parts.push(`${already} déjà présent(s)`);\nif (failed) parts.push(`❌ ${failed} échec(s)`);\nreturn [{ json: { message: parts.join(' · '), reaction: invited > 0 ? '✅' : '⚠️' } }];"
+      },
+      "id": "d1000000-0000-0000-0000-000000000005",
+      "name": "Résumé invite",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1296, 40]
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $('Parse').item.json;\nreturn [{ json: { message: `📭 Liste **${p.liste}** vide ou inexistante — personne à inviter.`, reaction: '📭' } }];"
+      },
+      "id": "d1000000-0000-0000-0000-000000000006",
+      "name": "Invite - liste vide",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [848, 200]
+    },
+
+    {
+      "parameters": {
+        "jsCode": "const cmd = String($json.command || '/?');\nreturn [{ json: { message: `❌ Commande inconnue : \\`${cmd}\\`.`, reaction: '❌' } }];"
+      },
+      "id": "cccc1111-2222-3333-4444-555566667777",
+      "name": "Commande inconnue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 320]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"message\": $json.message, \"reaction\": $json.reaction } }}",
+        "options": {}
+      },
+      "id": "5901c1ce-bdc0-4a81-af69-fde56b49879d",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1552, 0]
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Parse", "type": "main", "index": 0 }]] },
+    "Parse": { "main": [[{ "node": "Switch commande", "type": "main", "index": 0 }]] },
+    "Switch commande": {
+      "main": [
+        [{ "node": "Grist - liste-membre", "type": "main", "index": 0 }],
+        [{ "node": "Grist - invite", "type": "main", "index": 0 }],
+        [{ "node": "Commande inconnue", "type": "main", "index": 0 }]
+      ]
+    },
+    "Grist - liste-membre": { "main": [[{ "node": "Format liste-membre", "type": "main", "index": 0 }]] },
+    "Format liste-membre": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] },
+    "Grist - invite": { "main": [[{ "node": "Des membres ?", "type": "main", "index": 0 }]] },
+    "Des membres ?": {
+      "main": [
+        [{ "node": "Membres -> items", "type": "main", "index": 0 }],
+        [{ "node": "Invite - liste vide", "type": "main", "index": 0 }]
+      ]
+    },
+    "Membres -> items": { "main": [[{ "node": "Inviter (Matrix)", "type": "main", "index": 0 }]] },
+    "Inviter (Matrix)": { "main": [[{ "node": "Résumé invite", "type": "main", "index": 0 }]] },
+    "Résumé invite": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] },
+    "Invite - liste vide": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] },
+    "Commande inconnue": { "main": [[{ "node": "Respond", "type": "main", "index": 0 }]] }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "15bcb77e58e024e1cbac1db1b9b7cf94dd24e96b9dd439ba74107f92f0a54752"
+  }
+}

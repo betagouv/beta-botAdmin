@@ -26,11 +26,16 @@ import {
 import { testAccess } from "../connectors/caldav.js";
 import { upsertInscription, setStatut } from "../tools/rappels-store.js";
 import { runReminderTick } from "../tools/rappels-scheduler.js";
+import { forwardMembresCommand } from "../connectors/n8n.js";
+import { parseInviteArgs, isInviteHelp, buildInviteHelp } from "../commands/invite.js";
+import { resolveInviteTarget, isMemberOf } from "../commands/rooms.js";
 import { buildHelp, buildOpsHelp } from "../tools/help.js";
 
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
 // out — it still works (handled explicitly below) but isn't advertised.
+// Publicly advertised commands. `/liste-membre` and `/invite` work but are
+// intentionally hidden for now (not shown in /help, the notice or the hint).
 const KNOWN_COMMANDS = [
   "/help",
   "/emails",
@@ -1087,6 +1092,25 @@ export class MatrixConnector {
         );
         await this.sendReaction(roomId, userEventId, result.reaction);
         await this.sendMessage(roomId, result.message, userEventId, threadRoot);
+        // `/salon create … --liste <liste>`: room created, now invite the list
+        // via the same n8n flow as /invite, into the fresh room.
+        if (result.inviteListe && result.createdRoomId) {
+          const inv = await forwardMembresCommand({
+            command: "/invite",
+            text: `/invite ${result.inviteListe}`,
+            sender,
+            roomId,
+            isDM,
+            managedSpace: config.matrix.managedSpace,
+            liste: result.inviteListe,
+            targetRoomId: result.createdRoomId,
+            targetLabel: result.targetLabel ?? "le salon",
+            homeserver: config.matrix.homeserver,
+          });
+          await this.sendMessage(roomId, inv.message, userEventId, threadRoot);
+          record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: `salon+liste n8n ${inv.reaction}` });
+          return;
+        }
         const status: "ok" | "error" = result.reaction === "❌" || result.reaction === "⛔" ? "error" : "ok";
         record({ user: sender, room: roomId, kind: "slash", text, status, detail: result.reaction });
         return;
@@ -1108,6 +1132,93 @@ export class MatrixConnector {
         await this.sendMessage(roomId, result.message, userEventId, threadRoot);
         const status: "ok" | "error" = result.reaction === "❌" || result.reaction === "⛔" ? "error" : "ok";
         record({ user: sender, room: roomId, kind: "slash", text, status, detail: result.reaction });
+        return;
+      }
+
+      // /liste-membre → forward the raw command to n8n as-is.
+      const n8nVerb = text.split(/\s+/)[0] ?? "";
+      if (n8nVerb === "/liste-membre" || n8nVerb === "/liste-membres") {
+        const reply = await forwardMembresCommand({
+          command: n8nVerb,
+          text,
+          sender,
+          roomId,
+          isDM,
+          managedSpace: config.matrix.managedSpace,
+        });
+        await this.sendReaction(roomId, userEventId, reply.reaction);
+        await this.sendMessage(roomId, reply.message, userEventId, threadRoot);
+        const status: "ok" | "error" =
+          reply.reaction === "✅" || reply.reaction === "📋" || reply.reaction === "📭"
+            ? "ok"
+            : "error";
+        record({ user: sender, room: roomId, kind: "slash", text, status, detail: `n8n ${reply.reaction}` });
+        return;
+      }
+
+      // /invite: the bot parses + resolves the target room/space to an id, then
+      // forwards to n8n which reads the list and performs the invitations.
+      if (n8nVerb === "/invite") {
+        // `/invite`, `/invite help`, `/invite aide` → help card (no n8n call).
+        if (isInviteHelp(text)) {
+          await this.sendReaction(roomId, userEventId, "📖");
+          await this.sendMessage(roomId, buildInviteHelp(), userEventId, threadRoot);
+          record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "invite-help" });
+          return;
+        }
+        const parsed = parseInviteArgs(text);
+        if (!parsed) {
+          await this.sendReaction(roomId, userEventId, "❌");
+          await this.sendMessage(
+            roomId,
+            "❌ Usage : `/invite --salon <nom> --liste <liste>` ou `/invite --espace <nom> --liste <liste>`",
+            userEventId,
+            threadRoot,
+          );
+          record({ user: sender, room: roomId, kind: "slash", text, status: "error", detail: "invite bad-syntax" });
+          return;
+        }
+        const target = await resolveInviteTarget(
+          this.client,
+          config.matrix.managedSpace,
+          parsed.kind,
+          parsed.target,
+        );
+        if ("error" in target) {
+          await this.sendReaction(roomId, userEventId, "❌");
+          await this.sendMessage(roomId, target.error, userEventId, threadRoot);
+          record({ user: sender, room: roomId, kind: "slash", text, status: "error", detail: "invite target-unresolved" });
+          return;
+        }
+        // Only a member of the target may bulk-invite into it.
+        if (!(await isMemberOf(this.client, target.roomId, sender))) {
+          await this.sendReaction(roomId, userEventId, "⛔");
+          await this.sendMessage(
+            roomId,
+            `⛔ Tu n'es pas membre de ${target.label}, tu ne peux pas y inviter.`,
+            userEventId,
+            threadRoot,
+          );
+          record({ user: sender, room: roomId, kind: "slash", text, status: "refused", detail: "invite not-member" });
+          return;
+        }
+        const reply = await forwardMembresCommand({
+          command: "/invite",
+          text,
+          sender,
+          roomId,
+          isDM,
+          managedSpace: config.matrix.managedSpace,
+          liste: parsed.liste,
+          targetRoomId: target.roomId,
+          targetLabel: target.label,
+          homeserver: config.matrix.homeserver,
+        });
+        await this.sendReaction(roomId, userEventId, reply.reaction);
+        await this.sendMessage(roomId, reply.message, userEventId, threadRoot);
+        const status: "ok" | "error" =
+          reply.reaction === "✅" || reply.reaction === "📋" ? "ok" : "error";
+        record({ user: sender, room: roomId, kind: "slash", text, status, detail: `n8n ${reply.reaction}` });
         return;
       }
 
