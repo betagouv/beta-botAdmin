@@ -100,7 +100,7 @@ Dans ${cmdWhere}, **mentionne-moi suivi d'une commande**, par exemple \`@betabot
 | \`@betabot /salon create <nom>\` | tout le monde | Crée un salon chiffré, t'y invite, et le rattache à l'espace géré |
 | \`@betabot /salon create <nom> --clair\` | tout le monde | Idem mais salon **non chiffré** (le chiffrement ne peut pas être retiré ensuite) |
 | \`@betabot /salon create <nom> <espace>\` | tout le monde | Idem, mais rattache le salon au sous-espace **<espace>** (nom **ou** ID). Nom avec espaces : entre guillemets, ex. \`@betabot /salon create <nom> "Pole Tech"\` |
-| \`@betabot /salon create <nom> --liste <liste>\` | tout le monde | Idem, et **invite** tous les membres de la liste **<liste>** dans le salon créé (voir \`@betabot /liste-membre\`) |
+| \`@betabot /salon create <nom> --startup <startup> [--role <role>]\` | tout le monde | Idem, et **invite** les membres de la startup **<startup>** dans le salon créé (\`--role\` restreint à ce rôle) |
 | \`@betabot /salon delete <nom>\` | modérateur+ du salon ciblé | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
 | \`@betabot /salon delete <nom> <espace>\` | modérateur+ du salon ciblé | Idem mais cible le salon dans le sous-espace **<espace>** (lève l'ambiguïté ; espace avec espaces = entre guillemets) |
 

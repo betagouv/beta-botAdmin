@@ -28,14 +28,14 @@ import { upsertInscription, setStatut } from "../tools/rappels-store.js";
 import { runReminderTick } from "../tools/rappels-scheduler.js";
 import { forwardMembresCommand } from "../connectors/n8n.js";
 import { parseInviteArgs, isInviteHelp, buildInviteHelp } from "../commands/invite.js";
-import { resolveInviteTarget, isMemberOf } from "../commands/rooms.js";
+import { resolveInviteTarget, canInvite, canPromote } from "../commands/rooms.js";
 import { buildHelp, buildOpsHelp } from "../tools/help.js";
 
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
 // out — it still works (handled explicitly below) but isn't advertised.
-// Publicly advertised commands. `/liste-membre` and `/invite` work but are
-// intentionally hidden for now (not shown in /help, the notice or the hint).
+// Publicly advertised commands. `/invite` works but is intentionally hidden
+// for now (not shown in /help, the notice or the hint).
 const KNOWN_COMMANDS = [
   "/help",
   "/emails",
@@ -990,8 +990,15 @@ export class MatrixConnector {
       const dmBypass =
         config.matrix.dmTestUsers.includes(sender) &&
         (await this.isDMRoom(roomId));
+      // `/invite` is exempt from the gate on purpose: it targets the room it is
+      // typed in (or that room's parent space), so confining it to the command
+      // rooms would leave it able to target only the command rooms themselves.
+      // The authorisation boundary is the membership check on the *target*
+      // below, not this room gate.
+      const gateExempt = text.split(/\s+/)[0] === "/invite";
       if (
         !dmBypass &&
+        !gateExempt &&
         commandRooms.length > 0 &&
         !commandRooms.includes(roomId)
       ) {
@@ -1092,23 +1099,24 @@ export class MatrixConnector {
         );
         await this.sendReaction(roomId, userEventId, result.reaction);
         await this.sendMessage(roomId, result.message, userEventId, threadRoot);
-        // `/salon create … --liste <liste>`: room created, now invite the list
-        // via the same n8n flow as /invite, into the fresh room.
-        if (result.inviteListe && result.createdRoomId) {
+        // `/salon create … --startup <startup>`: room created, now invite the
+        // startup via the same n8n flow as /invite, into the fresh room.
+        if (result.inviteStartup && result.createdRoomId) {
           const inv = await forwardMembresCommand({
             command: "/invite",
-            text: `/invite ${result.inviteListe}`,
+            text: `/invite ${result.inviteStartup}${result.inviteRole ? ` --role ${result.inviteRole}` : ""}`,
             sender,
             roomId,
             isDM,
             managedSpace: config.matrix.managedSpace,
-            liste: result.inviteListe,
+            startup: result.inviteStartup,
+            ...(result.inviteRole ? { role: result.inviteRole } : {}),
             targetRoomId: result.createdRoomId,
             targetLabel: result.targetLabel ?? "le salon",
             homeserver: config.matrix.homeserver,
           });
           await this.sendMessage(roomId, inv.message, userEventId, threadRoot);
-          record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: `salon+liste n8n ${inv.reaction}` });
+          record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: `salon+startup n8n ${inv.reaction}` });
           return;
         }
         const status: "ok" | "error" = result.reaction === "❌" || result.reaction === "⛔" ? "error" : "ok";
@@ -1135,29 +1143,9 @@ export class MatrixConnector {
         return;
       }
 
-      // /liste-membre → forward the raw command to n8n as-is.
-      const n8nVerb = text.split(/\s+/)[0] ?? "";
-      if (n8nVerb === "/liste-membre" || n8nVerb === "/liste-membres") {
-        const reply = await forwardMembresCommand({
-          command: n8nVerb,
-          text,
-          sender,
-          roomId,
-          isDM,
-          managedSpace: config.matrix.managedSpace,
-        });
-        await this.sendReaction(roomId, userEventId, reply.reaction);
-        await this.sendMessage(roomId, reply.message, userEventId, threadRoot);
-        const status: "ok" | "error" =
-          reply.reaction === "✅" || reply.reaction === "📋" || reply.reaction === "📭"
-            ? "ok"
-            : "error";
-        record({ user: sender, room: roomId, kind: "slash", text, status, detail: `n8n ${reply.reaction}` });
-        return;
-      }
-
       // /invite: the bot parses + resolves the target room/space to an id, then
       // forwards to n8n which reads the list and performs the invitations.
+      const n8nVerb = text.split(/\s+/)[0] ?? "";
       if (n8nVerb === "/invite") {
         // `/invite`, `/invite help`, `/invite aide` → help card (no n8n call).
         if (isInviteHelp(text)) {
@@ -1171,7 +1159,7 @@ export class MatrixConnector {
           await this.sendReaction(roomId, userEventId, "❌");
           await this.sendMessage(
             roomId,
-            "❌ Usage : `/invite --salon <nom> --liste <liste>` ou `/invite --espace <nom> --liste <liste>`",
+            "❌ Usage : `/invite <startup>` (ce salon), `+ --espace` (l'espace parent), ou `--salon <nom>` / `--espace <nom>`. Filtre : `--role <role>`. Aide : `/invite help`.",
             userEventId,
             threadRoot,
           );
@@ -1181,8 +1169,8 @@ export class MatrixConnector {
         const target = await resolveInviteTarget(
           this.client,
           config.matrix.managedSpace,
-          parsed.kind,
           parsed.target,
+          roomId,
         );
         if ("error" in target) {
           await this.sendReaction(roomId, userEventId, "❌");
@@ -1190,17 +1178,38 @@ export class MatrixConnector {
           record({ user: sender, room: roomId, kind: "slash", text, status: "error", detail: "invite target-unresolved" });
           return;
         }
-        // Only a member of the target may bulk-invite into it.
-        if (!(await isMemberOf(this.client, target.roomId, sender))) {
+        // The requester must hold invite rights in the target itself — being a
+        // member is not enough when the room reserves inviting to moderators.
+        const perm = await canInvite(this.client, target.roomId, sender);
+        if (!perm.ok) {
+          const why =
+            perm.reason === "not-member"
+              ? `⛔ Tu n'es pas membre de ${target.label}, tu ne peux pas y inviter.`
+              : perm.reason === "power"
+                ? `⛔ Tu n'as pas le droit d'inviter dans ${target.label} (niveau requis : ${perm.required}, le tien : ${perm.level}).`
+                : `⛔ Impossible de lire les permissions de ${target.label}. Invitation refusée.`;
           await this.sendReaction(roomId, userEventId, "⛔");
-          await this.sendMessage(
-            roomId,
-            `⛔ Tu n'es pas membre de ${target.label}, tu ne peux pas y inviter.`,
-            userEventId,
-            threadRoot,
-          );
-          record({ user: sender, room: roomId, kind: "slash", text, status: "refused", detail: "invite not-member" });
+          await this.sendMessage(roomId, why, userEventId, threadRoot);
+          record({ user: sender, room: roomId, kind: "slash", text, status: "refused", detail: `invite ${perm.reason}` });
           return;
+        }
+        // `--moderateur` grants power 50 to everyone invited: require the
+        // requester to already hold it, so the bot never hands out more than
+        // the person asking could hand out themselves.
+        if (parsed.moderateur) {
+          const promo = await canPromote(this.client, target.roomId, sender);
+          if (!promo.ok) {
+            const why =
+              promo.reason === "power"
+                ? `⛔ \`--moderateur\` demande d'être **modérateur** dans ${target.label} (niveau requis : ${promo.required}, le tien : ${promo.level}).`
+                : promo.reason === "not-member"
+                  ? `⛔ Tu n'es pas membre de ${target.label}.`
+                  : `⛔ Impossible de lire les permissions de ${target.label}. Promotion refusée.`;
+            await this.sendReaction(roomId, userEventId, "⛔");
+            await this.sendMessage(roomId, why, userEventId, threadRoot);
+            record({ user: sender, room: roomId, kind: "slash", text, status: "refused", detail: `promote ${promo.reason}` });
+            return;
+          }
         }
         const reply = await forwardMembresCommand({
           command: "/invite",
@@ -1209,7 +1218,9 @@ export class MatrixConnector {
           roomId,
           isDM,
           managedSpace: config.matrix.managedSpace,
-          liste: parsed.liste,
+          startup: parsed.startup,
+          ...(parsed.role ? { role: parsed.role } : {}),
+          ...(parsed.moderateur ? { moderateur: true } : {}),
           targetRoomId: target.roomId,
           targetLabel: target.label,
           homeserver: config.matrix.homeserver,

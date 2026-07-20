@@ -137,10 +137,10 @@ export const config = {
     ),
   },
   n8n: {
-    // Webhook that handles the member-list commands (/liste-membre, /invite).
-    // The bot forwards the parsed command to it; n8n reads Grist, performs the
-    // invitations, and returns the reply the bot posts. Empty → commands are
-    // reported as unavailable.
+    // Webhook that handles the member-list command (/invite). The bot forwards
+    // the parsed command to it; n8n reads Grist, performs the invitations, and
+    // returns the reply the bot posts. Empty → the command is reported as
+    // unavailable.
     membresWebhookUrl: process.env["N8N_MEMBRES_WEBHOOK_URL"],
     // Optional shared secret sent as `X-Betabot-Secret` so n8n can reject
     // requests that don't come from the bot.

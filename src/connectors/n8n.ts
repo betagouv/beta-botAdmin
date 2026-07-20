@@ -1,15 +1,15 @@
 import { config } from "../config.js";
 
-// Thin bridge to the n8n workflow that owns the member-list commands
-// (/liste-membre, /invite). The bot parses nothing business-specific: it
-// forwards the raw command + context, and posts back whatever n8n returns. This
-// keeps the list logic editable by non-devs in the n8n UI.
+// Thin bridge to the n8n workflow that owns the member-list command (/invite).
+// The bot parses nothing business-specific: it forwards the command + context,
+// and posts back whatever n8n returns. This keeps the list logic editable by
+// non-devs in the n8n UI.
 
 export interface N8nCommandPayload {
-  // The command verb, e.g. "/liste-membre" or "/invite".
+  // The command verb, e.g. "/invite".
   command: string;
   // Full command text as typed (mention already stripped), e.g.
-  // "/invite pole-tech --salon MonSalon".
+  // "/invite cartobio --salon MonSalon --role dev".
   text: string;
   sender: string;
   roomId: string;
@@ -17,8 +17,13 @@ export interface N8nCommandPayload {
   // The managed space id (context for n8n).
   managedSpace?: string;
   // /invite only: the bot pre-parses and resolves the target, so n8n just
-  // reads the list and invites into `targetRoomId`.
-  liste?: string;
+  // reads the startup's members and invites them into `targetRoomId`.
+  startup?: string;
+  // Optional role filter within the startup. Absent = every member.
+  role?: string;
+  // `--moderateur`: n8n must also raise each invited member to power 50.
+  // The bot has already checked the requester is entitled to grant it.
+  moderateur?: boolean;
   targetRoomId?: string;
   // Human-readable target ("le salon **X**") for n8n's reply.
   targetLabel?: string;
