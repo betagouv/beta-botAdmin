@@ -53,66 +53,25 @@ function buildBotHelp(): string {
       ? cmdRooms.map((r) => `\`${r}\``).join(", ")
       : "(aucune restriction, partout)";
 
-  const dimailDomain =
-    config.dimail.domain || "(non configuré, DIMAIL_DOMAIN vide)";
-
   return `# Aide betabot
 
-Je suis un bot **à commandes** : je ne discute pas en langage naturel. Je ne réagis qu'aux commandes ci-dessous.
-
-## Comment me solliciter
+Je suis un bot **à commandes** : je ne discute pas en langage naturel.
 
 Dans ${cmdWhere}, **mentionne-moi suivi d'une commande**, par exemple \`@betabot /help\`.
 
-> ⚠️ Je ne discute pas en langage naturel. Un texte normal (en MP ou en \`@mention\`, sans commande) ne renvoie qu'un message générique, et sans \`@\` ni \`/\` dans un salon je reste silencieux.
+## Commandes
 
-## Commandes slash
+Une commande **de base** par ligne (la plus courante). Toutes les variantes et options sont dans la carte \`… help\` correspondante.
 
-### \`/help\` (ou \`/aide\`)
-- **Effet** : affiche cette aide — toutes les commandes et leurs paramètres.
-
-### \`/emails\` — gestion des mailing lists
-- **Domaine par défaut** : ${dimailDomain}
-
-| Sous-commande | Description |
-|---|---|
-| \`@betabot /emails\` ou \`@betabot /emails help\` | Affiche cette aide /emails |
-| \`@betabot /emails create <liste> <email>\` | Crée une nouvelle liste avec un propriétaire |
-| \`@betabot /emails list <liste>\` | Affiche les membres d'une liste |
-| \`@betabot /emails join <liste> <email>\` | Ajoute un membre à une liste |
-| \`@betabot /emails leave <liste> <email>\` | Retire un membre d'une liste |
-
-**Format \`<liste>\`** :
-- Nom simple (\`cartobio\`) → résolu en \`cartobio@<domaine par défaut>\`
-- Adresse complète (\`contact@beta.gouv.fr\`)
-
-> ℹ️ On ne gère que les adresses en \`beta.gouv.fr\`.
-
-**Exemples** :
-- \`@betabot /emails join cartobio jean.louis@beta.gouv.fr\`
-- \`@betabot /emails join contact@beta.gouv.fr jean.louis@beta.gouv.fr\`
-
-### \`/salon\` — gestion des salons d'un espace
-
-| Sous-commande | Qui | Description |
+| Commande de base | Ce qu'elle fait | Tout le reste |
 |---|---|---|
-| \`@betabot /salon list\` | tout le monde | Liste les salons, groupés par espace |
-| \`@betabot /salon create <nom>\` | tout le monde | Crée un salon chiffré, t'y invite, et le rattache à l'espace géré |
-| \`@betabot /salon create <nom> --clair\` | tout le monde | Idem mais salon **non chiffré** (le chiffrement ne peut pas être retiré ensuite) |
-| \`@betabot /salon create <nom> <espace>\` | tout le monde | Idem, mais rattache le salon au sous-espace **<espace>** (nom **ou** ID). Nom avec espaces : entre guillemets, ex. \`@betabot /salon create <nom> "Pole Tech"\` |
-| \`@betabot /salon create <nom> --startup <startup> [--role <role>]\` | tout le monde | Idem, et **invite** les membres de la startup **<startup>** dans le salon créé (\`--role\` restreint à ce rôle) |
-| \`@betabot /salon delete <nom>\` | modérateur+ du salon ciblé | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
-| \`@betabot /salon delete <nom> <espace>\` | modérateur+ du salon ciblé | Idem mais cible le salon dans le sous-espace **<espace>** (lève l'ambiguïté ; espace avec espaces = entre guillemets) |
+| \`@betabot /help\` | Affiche cette aide | — |
+| \`@betabot /emails join <liste> <email>\` | Ajoute quelqu'un à une mailing list | \`@betabot /emails help\` |
+| \`@betabot /salon create <nom>\` | Crée un salon dans l'espace géré | \`@betabot /salon help\` |
+| \`@betabot /espace create <nom>\` | Crée un sous-espace | \`@betabot /espace help\` |
+| \`@betabot /invite <startup>\` | Invite une startup dans le salon où tu tapes | \`@betabot /invite help\` |
 
-### \`/espace\` — gestion des sous-espaces
-
-| Sous-commande | Qui | Description |
-|---|---|---|
-| \`@betabot /espace list\` | tout le monde | Liste les sous-espaces de l'espace géré |
-| \`@betabot /espace list <espace>\` | tout le monde | Liste les sous-espaces d'un sous-espace (nom **ou** ID, à n'importe quelle profondeur) |
-| \`@betabot /espace create <nom>\` | tout le monde | Crée un sous-espace et le rattache à l'espace géré |
-| \`@betabot /espace create <nom> <espace-parent>\` | membre de l'espace parent | Crée un sous-espace **imbriqué** dans **<espace-parent>** (nom **ou** ID). Nom avec espaces : entre guillemets, ex. \`@betabot /espace create <nom> "Pole Tech"\` |
-| \`@betabot /espace delete <nom>\` | utilisateur autorisé, en MP | Supprime un sous-espace **vide** (refusé s'il contient encore des salons ou sous-espaces) |
+> ⚠️ Un texte sans commande ne renvoie qu'un message générique, et sans \`@\` ni \`/\` dans un salon je reste silencieux.
 
 ## Si quelque chose ne marche pas
 

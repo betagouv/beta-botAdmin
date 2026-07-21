@@ -40,40 +40,40 @@ test("parseInviteArgs: bare --espace → the parent space", () => {
   });
 });
 
-test("parseInviteArgs: --role restricts the invitation", () => {
-  assert.deepEqual(parseInviteArgs("/invite cartobio --role dev"), {
+test("parseInviteArgs: --domaine restricts the invitation", () => {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --domaine dev"), {
     startup: "cartobio",
-    role: "dev",
+    domaine: "dev",
     target: { kind: "ici" },
   });
 });
 
-test("parseInviteArgs: --role combines with a target, in any order", () => {
+test("parseInviteArgs: --domaine combines with a target, in any order", () => {
   const expected = {
     startup: "cartobio",
-    role: "dev",
+    domaine: "dev",
     target: { kind: "espace-parent" },
   };
-  assert.deepEqual(parseInviteArgs("/invite cartobio --role dev --espace"), expected);
-  assert.deepEqual(parseInviteArgs("/invite cartobio --espace --role dev"), expected);
+  assert.deepEqual(parseInviteArgs("/invite cartobio --domaine dev --espace"), expected);
+  assert.deepEqual(parseInviteArgs("/invite cartobio --espace --domaine dev"), expected);
 });
 
-test("parseInviteArgs: bare --espace before --role does not eat the next flag", () => {
-  assert.deepEqual(parseInviteArgs("/invite cartobio --espace --role dev"), {
+test("parseInviteArgs: bare --espace before --domaine does not eat the next flag", () => {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --espace --domaine dev"), {
     startup: "cartobio",
-    role: "dev",
+    domaine: "dev",
     target: { kind: "espace-parent" },
   });
 });
 
-test("parseInviteArgs: quoted startup, salon and role with spaces", () => {
+test("parseInviteArgs: quoted startup, salon and domaine with spaces", () => {
   assert.deepEqual(
     parseInviteArgs(
-      '/invite "Mon Startup" --salon "Mon Salon" --role "chargé de déploiement"',
+      '/invite "Mon Startup" --salon "Mon Salon" --domaine "chargé de déploiement"',
     ),
     {
       startup: "Mon Startup",
-      role: "chargé de déploiement",
+      domaine: "chargé de déploiement",
       target: { kind: "salon", name: "Mon Salon" },
     },
   );
@@ -100,8 +100,8 @@ test("parseInviteArgs: a named --salon wins over a bare --espace", () => {
   );
 });
 
-test("parseInviteArgs: bare --role means everybody", () => {
-  assert.deepEqual(parseInviteArgs("/invite cartobio --role"), {
+test("parseInviteArgs: bare --domaine means everybody", () => {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --domaine"), {
     startup: "cartobio",
     target: { kind: "ici" },
   });
@@ -123,12 +123,12 @@ test("parseInviteArgs: --modérateur (accented) works too", () => {
   });
 });
 
-test("parseInviteArgs: --moderateur combines with role and target", () => {
+test("parseInviteArgs: --moderateur combines with domaine and target", () => {
   assert.deepEqual(
-    parseInviteArgs("/invite cartobio --espace --role dev --moderateur"),
+    parseInviteArgs("/invite cartobio --espace --domaine dev --moderateur"),
     {
       startup: "cartobio",
-      role: "dev",
+      domaine: "dev",
       moderateur: true,
       target: { kind: "espace-parent" },
     },
@@ -136,17 +136,17 @@ test("parseInviteArgs: --moderateur combines with role and target", () => {
 });
 
 test("parseInviteArgs: --moderateur absent leaves the flag unset", () => {
-  assert.deepEqual(parseInviteArgs("/invite cartobio --role dev"), {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --domaine dev"), {
     startup: "cartobio",
-    role: "dev",
+    domaine: "dev",
     target: { kind: "ici" },
   });
 });
 
 test("parseInviteArgs: --moderateur does not swallow a following flag", () => {
-  assert.deepEqual(parseInviteArgs("/invite cartobio --moderateur --role dev"), {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --moderateur --domaine dev"), {
     startup: "cartobio",
-    role: "dev",
+    domaine: "dev",
     moderateur: true,
     target: { kind: "ici" },
   });
@@ -154,5 +154,5 @@ test("parseInviteArgs: --moderateur does not swallow a following flag", () => {
 
 test("parseInviteArgs: null when the startup is missing", () => {
   assert.equal(parseInviteArgs("/invite --espace MonEspace"), null);
-  assert.equal(parseInviteArgs("/invite --role dev"), null);
+  assert.equal(parseInviteArgs("/invite --domaine dev"), null);
 });

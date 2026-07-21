@@ -48,6 +48,20 @@ function serverName(id: string): string {
   return i >= 0 ? id.slice(i + 1) : "";
 }
 
+// A clickable matrix.to link to a room/space. Rendered as a pill by Matrix
+// clients (Tchap/Element) — clicking navigates to the room. The `?via=` hint
+// tells the client which server to reach the room through, needed for id-based
+// links. `label` is the visible text (falls back to the id). Bold it upstream
+// if wanted: roomLink(id, `**${name}**`).
+function roomLink(roomId: string, label?: string): string {
+  const via = serverName(roomId);
+  const url = `https://matrix.to/#/${encodeURIComponent(roomId)}${
+    via ? `?via=${encodeURIComponent(via)}` : ""
+  }`;
+  const text = label && label.trim() ? label : roomId;
+  return `[${text}](${url})`;
+}
+
 // Close a room: detach it from the space, kick every member except the bot,
 // then the bot leaves last. Returns how many members were kicked. Used by the
 // `/salon delete` command.
@@ -578,7 +592,7 @@ async function createRoom(
 
   return {
     reaction: "✅",
-    message: `🏠 Salon **${name}** créé (${encrypted ? "privé, chiffré" : "public, non chiffré"}) et rattaché à ${where}.\nID : \`${roomId}\``,
+    message: `🏠 Salon ${roomLink(roomId, `**${name}**`)} créé (${encrypted ? "privé, chiffré" : "public, non chiffré"}) et rattaché à ${where}. Clique pour y aller.`,
     createdRoomId: roomId,
     targetLabel: `le salon **${name}**`,
   };
@@ -594,6 +608,11 @@ async function createSpace(
   inviteUserId: string,
   botUserId: string,
   parentLabel?: string | null,
+  // `--clair`: create the space public (discoverable/previewable) instead of
+  // private. Mirrors /salon's flag. NB: a space carries no message timeline, so
+  // the *encryption* half of "clair" has no observable effect on a space — the
+  // real difference is private vs public visibility.
+  encrypted = true,
 ): Promise<RoomCmdResult> {
   const existing = await listChildren(client, parentSpaceId);
   if (
@@ -618,10 +637,13 @@ async function createSpace(
   for (const u of invitees) users[u] = MODERATOR_POWER_LEVEL;
 
   const parentVia = serverName(parentSpaceId);
+  // Synapse forces encryption on private rooms (see createRoom): a `--clair`
+  // space must be created public to actually stay unencrypted. For a space the
+  // visibility is the meaningful effect — a space has no message timeline.
   const spaceId = await client.createRoom({
     name,
-    preset: "private_chat",
-    visibility: "private",
+    preset: encrypted ? "private_chat" : "public_chat",
+    visibility: encrypted ? "private" : "public",
     invite: invitees,
     creation_content: { type: "m.space" },
     power_level_content_override: { users },
@@ -644,7 +666,9 @@ async function createSpace(
     : "l'espace géré";
   return {
     reaction: "✅",
-    message: `🌌 Espace **${name}** créé et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID : \`${spaceId}\``,
+    // The space name is a clickable pill; the raw ID is kept because
+    // `/invite --espace <id>` needs it (a space has no composer to read it from).
+    message: `🌌 Espace ${roomLink(spaceId, `**${name}**`)} créé (${encrypted ? "privé" : "public"}) et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID (pour \`/invite --espace\`) : \`${spaceId}\``,
   };
 }
 
@@ -868,7 +892,8 @@ function spacesHelpMessage(): RoomCmdResult {
 |---|---|
 | \`/espace list\` | Liste les sous-espaces de l'espace géré |
 | \`/espace list <espace>\` | Liste les sous-espaces d'un sous-espace (nom ou ID, à n'importe quelle profondeur) |
-| \`/espace create <nom>\` | Crée un sous-espace et le rattache à l'espace géré |
+| \`/espace create <nom>\` | Crée un sous-espace (**privé**) et le rattache à l'espace géré |
+| \`/espace create <nom> --clair\` | Idem mais **public** (découvrable). Un espace ne portant pas de messages, \`--clair\` n'agit que sur la visibilité |
 | \`/espace create <nom> <espace-parent>\` | Crée un sous-espace **imbriqué** dans **<espace-parent>** (nom ou ID). Nom avec des espaces : entre guillemets — \`/espace create <nom> "Pole Tech"\` |
 | \`/espace delete <nom>\` | Supprime un sous-espace **vide** (réservé à un utilisateur autorisé, en MP) |
 
@@ -926,13 +951,26 @@ export async function handleSpacesCommand(
         if (!rawArg)
           return {
             reaction: "❌",
-            message: '❌ Usage : `/espace create <nom> ["espace-parent"]`',
+            message: '❌ Usage : `/espace create <nom> ["espace-parent"] [--clair]`',
+          };
+        // `--clair` (anywhere) makes the space public instead of private. Strip
+        // it out before parsing name/parent so it never lands in either. Mirrors
+        // /salon create.
+        const encrypted = !/(?:^|\s)--clair\b/i.test(rawArg);
+        const arg = rawArg
+          .replace(/(?:^|\s)--clair\b/gi, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!arg)
+          return {
+            reaction: "❌",
+            message: '❌ Usage : `/espace create <nom> ["espace-parent"] [--clair]`',
           };
         // `<nom> [espace-parent]`: same grammar as `/salon create`. A trailing
         // quoted segment (or a bare last word that names an existing sub-espace)
         // nests the new espace inside that parent instead of the managed space.
         const { roomName: parsedName, spaceCandidate, explicit } =
-          parseRoomAndSpace(rawArg);
+          parseRoomAndSpace(arg);
         let parentSpaceId = managedSpaceId;
         let parentLabel: string | null = null;
         let spaceName = parsedName;
@@ -959,7 +997,7 @@ export async function handleSpacesCommand(
             // Bare last-word match: drop that word from the espace name. (Quoted
             // parent already gave us the prefix as `parsedName`.)
             if (!explicit)
-              spaceName = rawArg.split(/\s+/).slice(0, -1).join(" ");
+              spaceName = arg.split(/\s+/).slice(0, -1).join(" ");
           } else if (explicit) {
             // Quoted parent that doesn't exist: don't silently turn it into the
             // espace name — the intent was explicit.
@@ -972,7 +1010,7 @@ export async function handleSpacesCommand(
         if (!spaceName)
           return {
             reaction: "❌",
-            message: '❌ Usage : `/espace create <nom> ["espace-parent"]`',
+            message: '❌ Usage : `/espace create <nom> ["espace-parent"] [--clair]`',
           };
         return await createSpace(
           client,
@@ -981,6 +1019,7 @@ export async function handleSpacesCommand(
           senderUserId,
           botUserId,
           parentLabel,
+          encrypted,
         );
       }
       case "delete":

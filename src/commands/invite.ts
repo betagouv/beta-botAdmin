@@ -1,4 +1,4 @@
-// Pure parsing for `/invite <startup> [--role <role>] [--salon <nom>|--espace [<nom>]]`.
+// Pure parsing for `/invite <startup> [--domaine <domaine>] [--salon <nom>|--espace [<nom>]]`.
 // The bot parses + resolves the target room, then forwards to n8n (which reads
 // the startup's members and performs the invitations).
 
@@ -18,9 +18,9 @@ export type InviteTarget =
 export interface InviteArgs {
   // The startup whose members get invited (positional, first argument).
   startup: string;
-  // Optional: restrict the invitations to that role within the startup.
-  // Absent = everybody.
-  role?: string;
+  // Optional: restrict the invitations to that domaine (job family) within the
+  // startup. Matches the `domaine` column read by n8n. Absent = everybody.
+  domaine?: string;
   // `--moderateur`: also raise every invited member to moderator (power 50).
   // Gated behind a stricter permission check than the invitation itself.
   moderateur?: boolean;
@@ -45,13 +45,14 @@ export function buildInviteHelp(): string {
     "| `@betabot /invite <startup> --espace` | Invite la startup dans l'**espace qui contient ce salon** |",
     "| `@betabot /invite <startup> --salon <nom>` | Invite la startup dans le **salon** <nom> |",
     "| `@betabot /invite <startup> --espace <!id:serveur>` | Invite la startup dans l'**espace** d'ID donné |",
-    "| `@betabot /invite <startup> --role <role>` | N'invite que les membres ayant ce **rôle** |",
+    "| `@betabot /invite <startup> --domaine <domaine>` | N'invite que les membres de ce **domaine** |",
     "| `@betabot /invite <startup> --moderateur` | Invite **et** passe chacun **modérateur** |",
     "| `@betabot /invite help` | Affiche cette aide |",
     "",
     "- Le nom de la startup vient **en premier**, avant les options.",
     "- L'ordre des options n'importe pas ; elles se combinent.",
-    "- `--role` est optionnel : sans lui, **tous** les membres de la startup sont invités.",
+    "- `--domaine` est optionnel : sans lui, **tous** les membres de la startup sont invités.",
+    "- Domaines : `Animation`, `Attributaire`, `Autre`, `Coaching`, `Data`, `Déploiement`, `Design`, `Développement`, `Intraprenariat`, `Produit`, `Support`. Casse et accents ignorés ; un préfixe marche s'il est **sans ambiguïté** (ex. `dev`, `depl`, `desi`, `data`).",
     "- `--espace` **sans valeur** vise l'espace parent : un espace n'a pas de zone de saisie, on se place donc dans un de ses salons.",
     "- `--espace` **avec valeur** attend l'**ID** (`!xxxx:serveur`), pas le nom : récupère-le avec `@betabot /espace list`.",
     "- `--salon` accepte le **nom** ou l'ID. Nom avec des espaces : entre guillemets — `--salon \"Mon Salon\"`.",
@@ -59,7 +60,7 @@ export function buildInviteHelp(): string {
     "- Tu dois avoir le **droit d'inviter** dans le salon/espace ciblé — être simple membre ne suffit pas si le salon réserve l'invitation aux modérateurs.",
     "- `--moderateur` exige que tu sois **toi-même modérateur** (niveau ≥ 50) dans la cible : on ne donne pas un pouvoir qu'on n'a pas.",
     "",
-    "**Exemple** : depuis un salon de l'espace, `@betabot /invite cartobio --espace --role dev`",
+    "**Exemple** : depuis un salon de l'espace, `@betabot /invite cartobio --espace --domaine dev`",
   ].join("\n");
 }
 
@@ -75,10 +76,10 @@ function grabFlag(raw: string, flag: string): string | null {
   return m[1] ? m[1].replace(/^["']|["']$/g, "") : "";
 }
 
-// Parse `/invite <startup> [--role <role>] [--salon <nom> | --espace [<nom>]]`.
+// Parse `/invite <startup> [--domaine <domaine>] [--salon <nom> | --espace [<nom>]]`.
 // The startup is mandatory and positional; the rest is optional and
 // order-independent:
-//   --role <role>                   → only that role within the startup
+//   --domaine <domaine>             → only that domaine within the startup
 //   --moderateur                    → also promote them to moderator (power 50)
 //   --salon <nom>                   → that room, by name or id
 //   --espace <!id:serveur>          → that space, by ID only
@@ -96,16 +97,16 @@ export function parseInviteArgs(text: string): InviteArgs | null {
   const startup = head.replace(/^["']|["']$/g, "");
   if (!startup) return null;
   const flags = firstFlag === -1 ? "" : raw.slice(firstFlag);
-  const role = grabFlag(flags, "role");
+  const domaine = grabFlag(flags, "domaine");
   const salon = grabFlag(flags, "salon");
   const espace = grabFlag(flags, "espace");
   // Standalone switch, no value. Both spellings accepted — people type it both
   // ways and a silent no-op on an accent would be a nasty surprise.
   const moderateur = /(?:^|\s)--mod[eé]rateur\b/i.test(flags);
-  // A bare `--role` carries no role, so it means "everybody" like an absent one.
+  // A bare `--domaine` carries no value, so it means "everybody" like an absent one.
   const base = {
     startup,
-    ...(role ? { role } : {}),
+    ...(domaine ? { domaine } : {}),
     ...(moderateur ? { moderateur: true } : {}),
   };
   if (salon) return { ...base, target: { kind: "salon", name: salon } };

@@ -9,7 +9,7 @@ export interface N8nCommandPayload {
   // The command verb, e.g. "/invite".
   command: string;
   // Full command text as typed (mention already stripped), e.g.
-  // "/invite cartobio --salon MonSalon --role dev".
+  // "/invite cartobio --salon MonSalon --domaine dev".
   text: string;
   sender: string;
   roomId: string;
@@ -19,8 +19,9 @@ export interface N8nCommandPayload {
   // /invite only: the bot pre-parses and resolves the target, so n8n just
   // reads the startup's members and invites them into `targetRoomId`.
   startup?: string;
-  // Optional role filter within the startup. Absent = every member.
-  role?: string;
+  // Optional domaine filter within the startup (matches the `domaine` column).
+  // Absent = every member.
+  domaine?: string;
   // `--moderateur`: n8n must also raise each invited member to power 50.
   // The bot has already checked the requester is entitled to grant it.
   moderateur?: boolean;

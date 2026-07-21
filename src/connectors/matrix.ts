@@ -34,13 +34,14 @@ import { buildHelp, buildOpsHelp } from "../tools/help.js";
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
 // out — it still works (handled explicitly below) but isn't advertised.
-// Publicly advertised commands. `/invite` works but is intentionally hidden
-// for now (not shown in /help, the notice or the hint).
+// Publicly advertised commands (shown in /help, the generic notice and the
+// "unknown command" hint).
 const KNOWN_COMMANDS = [
   "/help",
   "/emails",
   "/salon",
   "/espace",
+  "/invite",
   "/rappels-calendrier",
 ] as const;
 
@@ -1104,13 +1105,16 @@ export class MatrixConnector {
         if (result.inviteStartup && result.createdRoomId) {
           const inv = await forwardMembresCommand({
             command: "/invite",
-            text: `/invite ${result.inviteStartup}${result.inviteRole ? ` --role ${result.inviteRole}` : ""}`,
+            // `/salon create` keeps the `--role` flag, but the filter concept is
+            // the same one `/invite --domaine` sends, so it maps to the single
+            // `domaine` payload field n8n reads.
+            text: `/invite ${result.inviteStartup}${result.inviteRole ? ` --domaine ${result.inviteRole}` : ""}`,
             sender,
             roomId,
             isDM,
             managedSpace: config.matrix.managedSpace,
             startup: result.inviteStartup,
-            ...(result.inviteRole ? { role: result.inviteRole } : {}),
+            ...(result.inviteRole ? { domaine: result.inviteRole } : {}),
             targetRoomId: result.createdRoomId,
             targetLabel: result.targetLabel ?? "le salon",
             homeserver: config.matrix.homeserver,
@@ -1159,7 +1163,7 @@ export class MatrixConnector {
           await this.sendReaction(roomId, userEventId, "❌");
           await this.sendMessage(
             roomId,
-            "❌ Usage : `/invite <startup>` (ce salon), `+ --espace` (l'espace parent), ou `--salon <nom>` / `--espace <nom>`. Filtre : `--role <role>`. Aide : `/invite help`.",
+            "❌ Usage : `/invite <startup>` (ce salon), `+ --espace` (l'espace parent), ou `--salon <nom>` / `--espace <nom>`. Filtre : `--domaine <domaine>`. Aide : `/invite help`.",
             userEventId,
             threadRoot,
           );
@@ -1219,7 +1223,7 @@ export class MatrixConnector {
           isDM,
           managedSpace: config.matrix.managedSpace,
           startup: parsed.startup,
-          ...(parsed.role ? { role: parsed.role } : {}),
+          ...(parsed.domaine ? { domaine: parsed.domaine } : {}),
           ...(parsed.moderateur ? { moderateur: true } : {}),
           targetRoomId: target.roomId,
           targetLabel: target.label,
