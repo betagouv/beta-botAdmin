@@ -39,7 +39,9 @@ export function parseListSpec(spec: string): ListSpec | { error: string } {
     if (!LIST_NAME_RE.test(user_name)) {
       return { error: `Nom de liste invalide: \`${user_name}\`` };
     }
-    return { user_name, domain };
+    // DiMail only accepts lowercase local-parts (regex ^[a-z0-9_-]+…), so
+    // normalize before sending — otherwise `PINUM` yields an HTTP 422.
+    return { user_name: user_name.toLowerCase(), domain };
   }
   if (!LIST_NAME_RE.test(spec)) {
     return {
@@ -52,7 +54,7 @@ export function parseListSpec(spec: string): ListSpec | { error: string } {
         "Aucun domaine par défaut configuré (DIMAIL_DOMAIN vide). Utilise la forme `<liste>@<domaine>`.",
     };
   }
-  return { user_name: spec, domain: config.dimail.domain };
+  return { user_name: spec.toLowerCase(), domain: config.dimail.domain };
 }
 
 // Authorization gate for /emails. Tchap mxids encode the user's email in the
@@ -97,7 +99,20 @@ function dimailError(action: string, res: unknown): CommandResult {
   const status = r.status ?? "?";
   let detail = "";
   if (r.body && typeof r.body === "object" && "detail" in r.body) {
-    detail = String((r.body as { detail: unknown }).detail);
+    const d = (r.body as { detail: unknown }).detail;
+    if (Array.isArray(d)) {
+      // FastAPI validation errors: [{ msg, loc, ... }, ...]. Join the msgs
+      // instead of stringifying the array (which yields "[object Object]").
+      detail = d
+        .map((e) =>
+          e && typeof e === "object" && "msg" in e
+            ? String((e as { msg: unknown }).msg)
+            : String(e),
+        )
+        .join("; ");
+    } else {
+      detail = String(d);
+    }
   } else if (typeof r.body === "string") {
     detail = r.body;
   }
