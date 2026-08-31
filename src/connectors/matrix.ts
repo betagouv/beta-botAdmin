@@ -26,7 +26,7 @@ import {
 import { testAccess } from "../connectors/caldav.js";
 import { upsertInscription, setStatut } from "../tools/rappels-store.js";
 import { runReminderTick } from "../tools/rappels-scheduler.js";
-import { forwardMembresCommand } from "../connectors/n8n.js";
+import { forwardMembresCommand, statutPourReaction } from "../connectors/n8n.js";
 import { parseInviteArgs, isInviteHelp, buildInviteHelp, unknownInviteFlags } from "../commands/invite.js";
 import { resolveInviteTarget, canInvite, canPromote } from "../commands/rooms.js";
 import { buildHelp, buildOpsHelp } from "../tools/help.js";
@@ -1230,30 +1230,6 @@ export class MatrixConnector {
             return;
           }
         }
-        // `--simuler` : répétition générale. Tout ce qui précède (résolution de
-        // la cible, droits d'invitation, droit de promotion) a déjà tourné pour
-        // de vrai ; on s'arrête ici, avant le seul appel qui invite. n8n n'est
-        // pas contacté du tout, donc aucune invitation ne peut partir.
-        if (parsed.simuler) {
-          const lignes = [
-            `🧪 **Simulation** — aucune invitation envoyée, le service n'a pas été contacté.`,
-            "",
-            `| | |`,
-            `|---|---|`,
-            `| Startup | \`${parsed.startup}\` |`,
-            `| Domaine | ${parsed.domaine ? `\`${parsed.domaine}\`` : "_tous_"} |`,
-            `| Cible | ${target.label} (\`${target.roomId}\`) |`,
-            `| Tes droits | ✅ tu peux inviter${parsed.moderateur ? " et promouvoir modérateur" : ""} |`,
-            "",
-            `Pour l'exécuter réellement, retire \`--simuler\` :`,
-            "",
-            `\`@betabot ${text.replace(/\s*--(?:simuler|simulation|dry-run)\b/i, "")}\``,
-          ];
-          await this.sendReaction(roomId, userEventId, "🧪");
-          await this.sendMessage(roomId, lignes.join("\n"), userEventId, threadRoot);
-          record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "invite simulation" });
-          return;
-        }
         const reply = await forwardMembresCommand({
           command: "/invite",
           text,
@@ -1264,14 +1240,22 @@ export class MatrixConnector {
           startup: parsed.startup,
           ...(parsed.domaine ? { domaine: parsed.domaine } : {}),
           ...(parsed.moderateur ? { moderateur: true } : {}),
-          targetRoomId: target.roomId,
+          // `--simuler` : n8n sélectionne les membres puis répond la liste sans
+          // inviter. La cible et les droits ci-dessus ont déjà été vérifiés
+          // pour de vrai, donc la répétition couvre tout le chemin réel.
+          ...(parsed.simuler ? { simuler: true } : {}),
+          // Deuxième filet, côté bot cette fois : en simulation on n'envoie pas
+          // le salon cible. Un n8n qui ignorerait `simuler` — version pas encore
+          // à jour, branche mal recâblée — tenterait alors ses invitations sur
+          // une URL sans salon et échouerait. La simulation ne dépend donc
+          // d'aucune version particulière du workflow.
+          targetRoomId: parsed.simuler ? "" : target.roomId,
           targetLabel: target.label,
           homeserver: config.matrix.homeserver,
         });
         await this.sendReaction(roomId, userEventId, reply.reaction);
         await this.sendMessage(roomId, reply.message, userEventId, threadRoot);
-        const status: "ok" | "error" =
-          reply.reaction === "✅" || reply.reaction === "📋" ? "ok" : "error";
+        const status = statutPourReaction(reply.reaction);
         record({ user: sender, room: roomId, kind: "slash", text, status, detail: `n8n ${reply.reaction}` });
         return;
       }

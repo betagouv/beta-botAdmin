@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseReply } from "../src/connectors/n8n.js";
+import { parseReply, statutPourReaction } from "../src/connectors/n8n.js";
 
 // A silent 200 must never read as success: that is how the `--moderateur`
 // branch of the workflow looked healthy while inviting nobody.
@@ -57,4 +57,23 @@ test("parseReply: a JSON object without `message` is flagged, not validated", ()
   assert.match(r.message, /Réponse inattendue/);
   // Le corps reçu reste visible pour le diagnostic.
   assert.match(r.message, /\{"ok":true\}/);
+});
+
+// 📭 / 🔎 / 🤔 / 🧪 sont des réponses utiles, pas des échecs : les compter en
+// erreur gonflait le taux d'échec de commandes parfaitement déroulées.
+test("statutPourReaction: les réponses informatives comptent comme ok", () => {
+  for (const r of ["✅", "📋", "📭", "🔎", "🤔", "🧪", "📖"]) {
+    assert.equal(statutPourReaction(r), "ok", `${r} devrait être ok`);
+  }
+});
+
+test("statutPourReaction: seules les vraies erreurs comptent comme error", () => {
+  for (const r of ["❌", "⛔", "⏱️", "⚠️"]) {
+    assert.equal(statutPourReaction(r), "error", `${r} devrait être error`);
+  }
+});
+
+test("statutPourReaction: une réaction inconnue n'est pas une erreur", () => {
+  assert.equal(statutPourReaction("🎉"), "ok");
+  assert.equal(statutPourReaction(""), "ok");
 });

@@ -25,6 +25,10 @@ export interface N8nCommandPayload {
   // `--moderateur`: n8n must also raise each invited member to power 50.
   // The bot has already checked the requester is entitled to grant it.
   moderateur?: boolean;
+  // `--simuler`: n8n selects the members and answers who *would* be invited,
+  // without inviting anyone. The bot cannot produce that list itself — the
+  // membership data lives on the n8n side.
+  simuler?: boolean;
   targetRoomId?: string;
   // Human-readable target ("le salon **X**") for n8n's reply.
   targetLabel?: string;
@@ -87,6 +91,18 @@ export async function forwardMembresCommand(
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Réactions qui signalent un vrai problème. Tout le reste est une réponse
+// normale, y compris 📭 (startup inconnue), 🔎 (domaine sans personne), 🤔
+// (suggestion d'orthographe) et 🧪 (simulation) : ce sont des réponses utiles,
+// pas des échecs, et les journaliser en `error` gonflait le taux d'échec de
+// commandes qui s'étaient parfaitement déroulées.
+const REACTIONS_EN_ERREUR = new Set(["❌", "⛔", "⏱️", "⚠️"]);
+
+// Comment journaliser une commande d'après la réaction que n8n a renvoyée.
+export function statutPourReaction(reaction: string): "ok" | "error" {
+  return REACTIONS_EN_ERREUR.has(reaction) ? "error" : "ok";
 }
 
 // What we answer when n8n returns HTTP 200 with nothing to say. A silent body

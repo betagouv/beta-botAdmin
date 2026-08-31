@@ -51,7 +51,7 @@ export function buildInviteHelp(): string {
     "| `@betabot /invite <startup> --espace <!id:serveur>` | Invite la startup dans l'**espace** d'ID donné |",
     "| `@betabot /invite <startup> --domaine <domaine>` | N'invite que les membres de ce **domaine** |",
     "| `@betabot /invite <startup> --moderateur` | Invite **et** passe chacun **modérateur** |",
-    "| `@betabot /invite <startup> --simuler` | **N'invite personne** : affiche ce que ferait la commande |",
+    "| `@betabot /invite <startup> --simuler` | **N'invite personne** : affiche **qui** serait invité |",
     "| `@betabot /invite help` | Affiche cette aide |",
     "",
     "- Le nom de la startup vient **en premier**, avant les options.",
@@ -64,7 +64,7 @@ export function buildInviteHelp(): string {
     "- Le salon/espace visé est cherché **sous l'espace géré**.",
     "- Tu dois avoir le **droit d'inviter** dans le salon/espace ciblé — être simple membre ne suffit pas si le salon réserve l'invitation aux modérateurs.",
     "- `--moderateur` exige que tu sois **toi-même modérateur** (niveau ≥ 50) dans la cible : on ne donne pas un pouvoir qu'on n'a pas.",
-    "- `--simuler` (ou `--dry-run`) fait une **répétition** : le bot résout la cible et vérifie tes droits, puis s'arrête. Aucune invitation n'est envoyée, le service n'est même pas contacté.",
+    "- `--simuler` (ou `--dry-run`) fait une **répétition générale** : la cible est résolue, tes droits vérifiés et la liste des membres constituée pour de vrai — puis le bot affiche **qui** serait invité, sans envoyer une seule invitation.",
     "",
     "**Exemple** : depuis un salon de l'espace, `@betabot /invite api-engagement --espace --domaine dev`",
   ].join("\n");

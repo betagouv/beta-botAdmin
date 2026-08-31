@@ -1,0 +1,657 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "betabot-liste-membre",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "bd7ee35b-1782-41da-bca7-313d20a69535",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1264,
+        -496
+      ],
+      "webhookId": "betabot-liste-membre",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "zrKuOJRBtkyYiA5N",
+          "name": "X-Betabot-Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Corps envoyé par le bot.\nconst body = $json.body ?? $json;\nconst text = String(body.text ?? '');\nconst command = (text.trim().split(/\\s+/)[0] || '').toLowerCase();\nconst args = text.replace(/^\\/\\S+\\s*/, '').trim();\n\n// Le bot a déjà parsé ET résolu la cible : ses champs font foi. Le repli sur le\n// texte n'existe que pour encaisser un payload plus ancien.\nconst flagIdx = args.search(/(?:^|\\s)--/);\nconst startupFallback = (flagIdx === -1 ? args : args.slice(0, flagIdx)).trim();\nconst domMatch = args.match(/--domaine\\s+(\"[^\"]+\"|'[^']+'|(?!--)\\S+)/i);\nconst modMatch = /(?:^|\\s)--mod[eé]rateur\\b/i.test(args);\n// Répétition générale : on déroule tout sauf l'invitation elle-même.\nconst simMatch = /(?:^|\\s)--(?:simuler|simulation|dry-run)\\b/i.test(args);\nconst unquote = (s) => String(s ?? '').replace(/^[\"']|[\"']$/g, '').trim();\n\nreturn [{ json: {\n  command,\n  args,\n  text,\n  sender: body.sender ?? '',\n  roomId: body.roomId ?? '',\n  isDM: body.isDM ?? false,\n  managedSpace: body.managedSpace ?? '',\n  startup: unquote(body.startup || startupFallback),\n  domaine: unquote(body.domaine || (domMatch ? domMatch[1] : '')),\n  moderateur: body.moderateur === true || modMatch,\n  simuler: body.simuler === true || simMatch,\n  targetRoomId: body.targetRoomId ?? '',\n  targetLabel: body.targetLabel ?? '',\n  homeserver: String(body.homeserver ?? '').replace(/\\/$/, ''),\n} }];\n"
+      },
+      "id": "e7e6e8a1-55ac-4410-9b4e-11811ca68d7c",
+      "name": "Parse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1040,
+        -496
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.command }}",
+                    "rightValue": "/invite",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "bf060a5d-c1be-4592-acaa-523af41bd2b9"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "invite"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "autre"
+        }
+      },
+      "id": "29374ac6-d959-4b6d-a6a8-28c19e62a4d7",
+      "name": "Switch commande",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        -816,
+        -496
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH active_members AS (\n    SELECT\n        users.uuid,\n        users.username,\n        users.fullname,\n        users.domaine,\n        users.primary_email,\n        matrix_accounts.matrix_id,\n        startups.ghid\n    FROM users\n    JOIN missions AS active_mission\n        ON  active_mission.user_id = users.uuid\n        AND (active_mission.end >= NOW() OR active_mission.end IS NULL)\n    LEFT JOIN missions_startups   ON missions_startups.mission_id = active_mission.uuid\n    LEFT JOIN startups            ON startups.uuid = missions_startups.startup_id\n    JOIN matrix_accounts          ON matrix_accounts.user_id = users.uuid\n    WHERE\n        users.primary_email_status = 'EMAIL_ACTIVE'\n)\nSELECT DISTINCT\n    username,\n    matrix_id,\n    domaine,\n    primary_email,\n    ghid\nFROM active_members\nORDER BY username;",
+        "options": {}
+      },
+      "id": "15672554-7f7a-4e03-8dc5-330bfb7a4c22",
+      "name": "Explore espace-membre",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -608,
+        -496
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "kmbejSvLKXkmcn1T",
+          "name": "RDU : PostGres Account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filtre startup + domaine, déduplique, émet un item par personne à inviter.\n// Distingue « startup inconnue » de « bon nom mais aucun membre pour ce\n// domaine », pour que le message aval soit juste. Reçoit TOUS les membres,\n// donc s'exécute toujours : c'est ce qui rend la branche « aucun » atteignable.\nconst p = $('Parse').first().json;\nconst norm = (s) => String(s ?? '')\n  .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n  .toLowerCase().trim();\n\nconst startup = norm(p.startup);\nconst domaine = norm(p.domaine);\nconst simuler = p.simuler === true;\n\nconst all = $input.all().map(i => i.json);\nconst inStartup = all.filter(m => norm(m.ghid) === startup);\nconst matched = inStartup.filter(\n  m => domaine === '' || norm(m.domaine).startsWith(domaine),\n);\n\nconst mxids = [...new Set(\n  matched.map(m => String(m.matrix_id ?? '').trim()).filter(Boolean),\n)];\n\nif (mxids.length === 0) {\n  const raison = inStartup.length === 0 ? 'startup' : 'domaine';\n  return [{ json: { aucun: true, raison, simuler } }];\n}\n\n// Filet de sécurité : en simulation, on vide le salon cible. Le branchement du\n// IF « Simulation ? » suffirait, mais s'il était un jour mal recâblé le POST\n// partirait sur une URL sans salon et échouerait — aucune invitation ne peut\n// sortir par accident.\nreturn mxids.map(mxid => ({\n  json: {\n    mxid,\n    simuler,\n    targetRoomId: simuler ? '' : p.targetRoomId,\n    homeserver: p.homeserver,\n  },\n}));\n"
+      },
+      "id": "14866cc9-88d5-4242-aee7-901bdacd4c14",
+      "name": "Membres -> items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -384,
+        -496
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "des-membres",
+              "leftValue": "={{ $json.aucun !== true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "a1263210-ff46-4ac6-a30e-f1c9b12fc14a",
+      "name": "Des membres ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -160,
+        -496
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Message quand personne n'est invité. Deux causes distinctes.\nconst p = $('Parse').first().json;\nconst raison = ($input.first().json ?? {}).raison || 'startup';\n\nconst norm = (s) => String(s ?? '')\n  .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n  .toLowerCase().trim();\n\n// Reconstruit la commande en gardant les options. p.text n'a plus la mention\n// (le bot l'a retirée) : ex. \"/invite xy --espace --domaine dev\".\nconst text = String(p.text ?? '');\nconst m = text.match(/^\\/invite\\s+(.*?)(\\s+--.*)?$/s);\nconst flags = (m && m[2]) ? m[2] : '';\nconst prefix = p.isDM ? '' : '@betabot ';\nconst cmd = (nom) => `${prefix}/invite ${nom}${flags}`;\n// Variante sans le filtre domaine, pour la suggestion « inviter tout le monde ».\nconst flagsSansDomaine = flags.replace(/\\s+--domaine\\s+(\"[^\"]+\"|'[^']+'|(?!--)\\S+)/i, '');\nconst cmdTous = (nom) => `${prefix}/invite ${nom}${flagsSansDomaine}`;\n\n// Startup trouvée, mais le filtre domaine exclut tout le monde.\nif (raison === 'domaine') {\n  const s = norm(p.startup);\n  const domaines = [...new Set(\n    $('Explore espace-membre').all().map(i => i.json)\n      .filter(x => norm(x.ghid) === s)\n      .map(x => String(x.domaine ?? '').trim())\n      .filter(Boolean),\n  )].sort();\n  const liste = domaines.length\n    ? domaines.map(d => `**${d}**`).join(', ')\n    : 'aucun domaine renseigné';\n  return [{ json: {\n    reaction: '🔎',\n    message:\n      `🔎 Startup **${p.startup}** trouvée, mais personne avec le domaine ` +\n      `**${p.domaine}**.\\nDomaines disponibles : ${liste}.\\n` +\n      `Pour inviter tout le monde :\\n\\`${cmdTous(p.startup)}\\``,\n  } }];\n}\n\n// Startup introuvable : cherche le ghid le plus proche.\nconst target = norm(p.startup);\nconst ghids = [...new Set(\n  $('Explore espace-membre').all()\n    .map(i => String(i.json.ghid ?? '').trim()).filter(Boolean),\n)];\n\nconst lev = (a, b) => {\n  const M = a.length, N = b.length;\n  const dp = Array.from({ length: M + 1 }, () => new Array(N + 1).fill(0));\n  for (let i = 0; i <= M; i++) dp[i][0] = i;\n  for (let j = 0; j <= N; j++) dp[0][j] = j;\n  for (let i = 1; i <= M; i++) for (let j = 1; j <= N; j++)\n    dp[i][j] = Math.min(\n      dp[i - 1][j] + 1, dp[i][j - 1] + 1,\n      dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),\n    );\n  return dp[M][N];\n};\n\nlet best = null, bestD = Infinity;\nfor (const g of ghids) {\n  const d = lev(target, norm(g));\n  if (d < bestD) { bestD = d; best = g; }\n}\n\n// Ne propose que si vraiment proche, sinon on suggérerait n'importe quoi.\nconst seuil = Math.max(2, Math.floor(target.length * 0.4));\nif (best && bestD <= seuil) {\n  return [{ json: {\n    reaction: '🤔',\n    message:\n      `🤔 Aucune startup **${p.startup}**. Tu voulais peut-être dire ` +\n      `**${best}** ?\\nSi oui, copie :\\n\\`${cmd(best)}\\``,\n  } }];\n}\n\nreturn [{ json: {\n  reaction: '📭',\n  message:\n    `📭 Aucune startup **${p.startup}** (ni nom approchant). Vérifie ` +\n    `l'orthographe — c'est le *ghid* de la startup.`,\n} }];\n"
+      },
+      "id": "169940de-0633-49b4-81fa-c0cac4c4b720",
+      "name": "Aucun membre",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        -336
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "simulation-demandee",
+              "leftValue": "={{ $json.simuler === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "f3a1c920-4d77-4e10-9c31-2b6f0a5d81aa",
+      "name": "Simulation ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        64,
+        -576
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Répétition générale : la sélection a été faite pour de vrai, l'invitation\n// n'est pas envoyée. C'est le seul chemin qui peut dire QUI serait invité,\n// puisque la liste vit ici et pas dans le bot.\nconst p = $('Parse').first().json;\n\nconst mxids = [...new Set(\n  $input.all().map(i => String(i.json.mxid ?? '').trim()).filter(Boolean),\n)];\n\nconst cible = p.targetLabel || 'le salon ciblé';\nconst filtre = p.domaine ? ` (domaine **${p.domaine}**)` : '';\nconst liste = mxids.map(m => `- \\`${m}\\``).join('\\n');\n\nconst lignes = [\n  `🧪 **Simulation** — aucune invitation envoyée.`,\n  ``,\n  `**${mxids.length}** membre(s) de **${p.startup}**${filtre} seraient invités dans ${cible} :`,\n  ``,\n  liste,\n];\n\nif (p.moderateur === true) {\n  lignes.push(``, `🛡️ Chacun serait aussi passé **modérateur** (niveau 50).`);\n}\n\nlignes.push(``, `Pour l'exécuter réellement, retire \\`--simuler\\`.`);\n\nreturn [{ json: { message: lignes.join('\\n'), reaction: '🧪' } }];\n"
+      },
+      "id": "7c4e51d8-9b2a-4f63-8ad0-1e5c7b93f244",
+      "name": "Résumé simulation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        -464
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.homeserver }}/_matrix/client/v3/rooms/{{ encodeURIComponent($json.targetRoomId) }}/invite",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { \"user_id\": $json.mxid } }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 5,
+              "batchInterval": 2000
+            }
+          }
+        }
+      },
+      "id": "dcba7edf-2b91-4914-b4c4-110ae01833dd",
+      "name": "Inviter (Matrix)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        288,
+        -688
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "6qUBj09suUuQl1zL",
+          "name": "tchap betabot-admin"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "promo-demandee",
+              "leftValue": "={{ $('Parse').first().json.moderateur === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "434c781a-c8be-4a78-93a4-9e6b2d9a5e32",
+      "name": "Promotion demandée ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        512,
+        -688
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Parse').first().json.homeserver }}/_matrix/client/v3/rooms/{{ encodeURIComponent($('Parse').first().json.targetRoomId) }}/state/m.room.power_levels/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBearerAuth",
+        "options": {}
+      },
+      "id": "bfdb47c3-949e-4b26-b70d-d6f5194d6654",
+      "name": "Lire power_levels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        736,
+        -880
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "6qUBj09suUuQl1zL",
+          "name": "tchap betabot-admin"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Fusionne les nouveaux modérateurs dans l'event m.room.power_levels.\n// UNE seule écriture pour tout le monde : cet event porte la map complète, donc\n// une écriture par personne repartirait d'une version périmée et écraserait la\n// précédente.\nconst entree = $input.first().json ?? {};\n\n// « Lire power_levels » est en continueRegularOutput : son échec arrive ici\n// sous forme d'item d'erreur. Il ne faut SURTOUT pas écrire dans ce cas — un\n// PUT construit sur une lecture manquante remplacerait la map complète des\n// pouvoirs du salon et rétrograderait tout le monde, admins compris.\nconst lectureRatee =\n  !!entree.error ||\n  typeof entree !== 'object' ||\n  (!('users' in entree) && !('users_default' in entree));\n\nif (lectureRatee) {\n  const e = entree.error;\n  const msg = e\n    ? String(e.message || e.reason || JSON.stringify(e)).slice(0, 160)\n    : 'réponse inattendue du homeserver (pas de champ users)';\n  return [{ json: { _lectureOk: false, _erreurLecture: msg } }];\n}\n\nconst pl = entree;\nconst users = { ...(pl.users ?? {}) };\nconst defaut = pl.users_default ?? 0;\n\n// On promeut toute la sélection, y compris ceux dont l'invitation a échoué\n// parce qu'ils étaient déjà dans le salon.\nconst mxids = $('Membres -> items').all()\n  .map(i => String(i.json.mxid ?? '').trim())\n  .filter(Boolean);\n\nlet promus = 0;\nfor (const m of mxids) {\n  const actuel = users[m] ?? defaut;\n  // Ne jamais rétrograder : un admin à 100 doit le rester.\n  if (actuel < 50) { users[m] = 50; promus++; }\n}\n\nreturn [{ json: { ...pl, users, _lectureOk: true, _promus: promus } }];\n"
+      },
+      "id": "c062d013-666e-495e-b225-28c06d7a0b3f",
+      "name": "Fusionner power_levels",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        -880
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "lecture-ok",
+              "leftValue": "={{ $json._lectureOk === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "b58d3e77-0a41-4c62-9f18-3d7ac1e6b902",
+      "name": "Lecture OK ?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1120,
+        -880
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "={{ $('Parse').first().json.homeserver }}/_matrix/client/v3/rooms/{{ encodeURIComponent($('Parse').first().json.targetRoomId) }}/state/m.room.power_levels/",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpBearerAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (() => { const o = { ...$json }; delete o._promus; delete o._lectureOk; delete o._erreurLecture; return o; })() }}",
+        "options": {}
+      },
+      "id": "13011e49-d1c3-49ff-ac9d-eac0925a7cd9",
+      "name": "Écrire power_levels",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1312,
+        -880
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "6qUBj09suUuQl1zL",
+          "name": "tchap betabot-admin"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compte succès / déjà présent / échec, remonte la raison des échecs, et\n// signale la promotion modérateur quand elle a été demandée.\nconst NODE_PARSE   = 'Parse';\nconst NODE_INVITER = 'Inviter (Matrix)';\nconst NODE_FUSION  = 'Fusionner power_levels';\nconst NODE_ECRIRE  = 'Écrire power_levels';\n\nconst p = $(NODE_PARSE).first().json;\n\n// Lecture explicite des invitations : avec --moderateur, l'entrée de ce node\n// vient du PUT power_levels, plus des invitations. $input.all() ne compterait\n// alors que la réponse de l'écriture des pouvoirs.\nlet resultats;\ntry { resultats = $(NODE_INVITER).all(); } catch (e) { resultats = $input.all(); }\n\nlet invited = 0, already = 0, failed = 0;\nconst raisons = new Set();\nfor (const it of resultats) {\n  const j = it.json ?? {};\n  if (!j.error) { invited++; continue; }\n  const e = j.error;\n  const msg = String((e && (e.message || e.reason)) || JSON.stringify(e ?? {}));\n  // « déjà dans le salon » est un 403 attendu ; les autres 403 (le bot n'a pas\n  // le droit d'inviter) doivent rester visibles.\n  if (/already in the room|already joined/i.test(msg)) already++;\n  else { failed++; raisons.add(msg.slice(0, 120)); }\n}\n\n// Promotion : ces nodes n'existent dans l'exécution que si --moderateur.\nlet promus = null, promoErreur = null;\nif (p.moderateur === true) {\n  let fusion = null;\n  try { fusion = $(NODE_FUSION).first().json ?? null; } catch (e) { fusion = null; }\n  // Lecture des pouvoirs ratée : l'écriture a été volontairement sautée.\n  if (fusion && fusion._lectureOk === false) {\n    promoErreur = `lecture des pouvoirs impossible — ${fusion._erreurLecture}`;\n  } else {\n    promus = fusion ? (fusion._promus ?? 0) : null;\n    try {\n      const w = $(NODE_ECRIRE).first().json ?? {};\n      if (w.error) {\n        const we = w.error;\n        promoErreur = String((we && (we.message || we.reason)) || JSON.stringify(we));\n      }\n    } catch (e) { /* node non exécuté */ }\n  }\n}\n\nconst parts = [`✅ ${invited} invité(s) dans ${p.targetLabel || 'le salon'}`];\nif (already) parts.push(`${already} déjà présent(s)`);\nif (failed)  parts.push(`❌ ${failed} échec(s)`);\nif (p.moderateur === true) {\n  if (promoErreur)          parts.push(`❌ promotion modérateur échouée`);\n  else if (promus !== null) parts.push(`🛡️ ${promus} passé(s) modérateur`);\n}\n\nlet message = parts.join(' · ');\nconst details = [...raisons];\nif (promoErreur) details.push(`power_levels : ${promoErreur.slice(0, 160)}`);\nif (details.length) message += `\\n\\nDétail : ${details.join(' | ')}`;\n\nconst reaction = (failed || promoErreur) ? '⚠️' : (invited > 0 ? '✅' : '📭');\nreturn [{ json: { message, reaction } }];\n"
+      },
+      "id": "0d2669b8-1bf3-4474-af84-6ffd8ee8f610",
+      "name": "Résumé invite",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1456,
+        -624
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const cmd = String($json.command || '/?');\nreturn [{ json: { message: `❌ Commande inconnue : \\`${cmd}\\`.`, reaction: '❌' } }];\n"
+      },
+      "id": "bb88f1b0-6715-4c26-9a1b-1467e976a93e",
+      "name": "Commande inconnue",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -544,
+        -176
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"message\": $json.message, \"reaction\": $json.reaction } }}",
+        "options": {}
+      },
+      "id": "cedc6191-b7c3-43d4-a17f-6d1f825c4b7e",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1728,
+        -464
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse": {
+      "main": [
+        [
+          {
+            "node": "Switch commande",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch commande": {
+      "main": [
+        [
+          {
+            "node": "Explore espace-membre",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Commande inconnue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Explore espace-membre": {
+      "main": [
+        [
+          {
+            "node": "Membres -> items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Membres -> items": {
+      "main": [
+        [
+          {
+            "node": "Des membres ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Des membres ?": {
+      "main": [
+        [
+          {
+            "node": "Simulation ?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Aucun membre",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simulation ?": {
+      "main": [
+        [
+          {
+            "node": "Résumé simulation",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Inviter (Matrix)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Résumé simulation": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aucun membre": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inviter (Matrix)": {
+      "main": [
+        [
+          {
+            "node": "Promotion demandée ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Promotion demandée ?": {
+      "main": [
+        [
+          {
+            "node": "Lire power_levels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Résumé invite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lire power_levels": {
+      "main": [
+        [
+          {
+            "node": "Fusionner power_levels",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fusionner power_levels": {
+      "main": [
+        [
+          {
+            "node": "Lecture OK ?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lecture OK ?": {
+      "main": [
+        [
+          {
+            "node": "Écrire power_levels",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Résumé invite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Écrire power_levels": {
+      "main": [
+        [
+          {
+            "node": "Résumé invite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Résumé invite": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Commande inconnue": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "15bcb77e58e024e1cbac1db1b9b7cf94dd24e96b9dd439ba74107f92f0a54752"
+  }
+}
