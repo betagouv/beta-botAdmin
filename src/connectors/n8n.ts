@@ -89,13 +89,26 @@ export async function forwardMembresCommand(
   }
 }
 
+// What we answer when n8n returns HTTP 200 with nothing to say. A silent body
+// means the workflow reached its end without reporting, so we know it was
+// *reached* but not that it *did* anything — and for /invite "anything" is
+// inviting a whole startup. Reporting success here would turn a workflow branch
+// that quietly does nothing into a green checkmark, which is exactly how the
+// `--moderateur` branch went unnoticed. Fail loud instead.
+const REPONSE_VIDE: N8nCommandReply = {
+  reaction: "⚠️",
+  message:
+    "⚠️ Le service (n8n) a répondu sans aucun message. Impossible de confirmer que l'action a été faite : vérifie dans le salon ciblé avant de relancer, et préviens un admin si ça se reproduit.",
+};
+
 // Parse the webhook body into a reply. Accepts a JSON object with `message`
 // (and optional `reaction`), or falls back to treating the raw body as the
-// message text.
-function parseReply(text: string): N8nCommandReply {
+// message text. An empty body — or a JSON object whose `message` is blank — is
+// never read as a success. Exported for the tests.
+export function parseReply(text: string): N8nCommandReply {
   const trimmed = text.trim();
   if (!trimmed) {
-    return { reaction: "✅", message: "✅ Fait." };
+    return REPONSE_VIDE;
   }
   try {
     const obj = JSON.parse(trimmed) as {
@@ -103,14 +116,27 @@ function parseReply(text: string): N8nCommandReply {
       reaction?: unknown;
     };
     if (obj && typeof obj === "object" && "message" in obj) {
+      const message = String(obj.message ?? "").trim();
+      // `{"message":""}` is just as uninformative as an empty body, and a
+      // reaction alone tells the user nothing about what happened.
+      if (!message) return REPONSE_VIDE;
       return {
-        message: String(obj.message ?? ""),
+        message,
         reaction:
           typeof obj.reaction === "string" && obj.reaction ? obj.reaction : "✅",
       };
     }
+    // A JSON object that carries no `message` is a malformed reply, not a
+    // success. Show it raw so nothing is lost, but drop the checkmark.
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      return {
+        reaction: "⚠️",
+        message: `⚠️ Réponse inattendue du service (n8n) : \`${trimmed.slice(0, 300)}\``,
+      };
+    }
   } catch {
-    // not JSON — treat the whole body as the message
+    // not JSON — treat the whole body as the message, which is the documented
+    // way for a workflow to answer with plain text.
   }
   return { reaction: "✅", message: trimmed };
 }

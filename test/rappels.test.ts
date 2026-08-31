@@ -4,7 +4,54 @@ import assert from "node:assert/strict";
 import {
   PendingInscriptions,
   extractCalDavUrl,
+  buildReminderMessage,
 } from "../src/commands/rappels.js";
+
+const EVENT = {
+  summary: "Hebdo raccourci équipe animation",
+  start: new Date("2026-07-23T12:00:00Z"),
+  organizer: "marine@beta.gouv.fr",
+  attendees: [],
+  meetingUrl: "https://visio.numerique.gouv.fr/uba-nsor-unf",
+};
+
+test("buildReminderMessage: labels a known visio link", () => {
+  const msg = buildReminderMessage(EVENT, 15);
+  assert.equal(
+    msg,
+    "📅 Rappel : **Hebdo raccourci équipe animation** dans ~15 min (14:00) avec marine@beta.gouv.fr." +
+      "\n🔗 [Rejoindre la visio](https://visio.numerique.gouv.fr/uba-nsor-unf)",
+  );
+});
+
+test("buildReminderMessage: adds a notes line when the event has one", () => {
+  const msg = buildReminderMessage(
+    { ...EVENT, notesUrl: "https://www.notion.so/betagouv/page" },
+    15,
+  );
+  assert.equal(
+    msg.split("\n")[2],
+    "📝 [Notes](https://www.notion.so/betagouv/page)",
+  );
+});
+
+test("buildReminderMessage: no notes line when it duplicates the visio", () => {
+  const msg = buildReminderMessage({ ...EVENT, notesUrl: EVENT.meetingUrl }, 15);
+  assert.ok(!msg.includes("📝"));
+});
+
+test("buildReminderMessage: shows an unknown link raw", () => {
+  const msg = buildReminderMessage(
+    { ...EVENT, meetingUrl: "https://pad.example.org/x" },
+    15,
+  );
+  assert.ok(msg.endsWith("\n🔗 https://pad.example.org/x"));
+});
+
+test("buildReminderMessage: omits the link line when there is none", () => {
+  const msg = buildReminderMessage({ ...EVENT, meetingUrl: "" }, 15);
+  assert.ok(!msg.includes("🔗"));
+});
 
 test("extractCalDavUrl: prefers a La Suite caldav URL over other links", () => {
   const body =

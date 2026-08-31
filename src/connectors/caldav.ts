@@ -13,9 +13,29 @@ export interface CalEvent {
   location: string;
   organizer: string;
   attendees: string[];
-  // First meeting URL found (LOCATION, X-*-URL, or a URL in DESCRIPTION).
+  // Best meeting URL found: a recognised video-conference link if the event has
+  // one, else the first URL in LOCATION, an X-*-URL property, or DESCRIPTION.
   meetingUrl: string;
+  // Companion link to the meeting notes (Notion & co), when the DESCRIPTION has
+  // one. Empty when the only link is the conference room.
+  notesUrl: string;
 }
+
+// Hosts that are actual video-conference links. An event usually carries other
+// URLs too (meeting notes, agenda, ticket), so a link on one of these hosts
+// wins over any other candidate, whichever property it was found in.
+const MEETING_HOST_RE =
+  /^https?:\/\/(?:[\w-]+\.)*(?:visio\.numerique\.gouv\.fr|webinaire\.numerique\.gouv\.fr|webconf\.numerique\.gouv\.fr|meet\.numerique\.gouv\.fr|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|zoom\.us|whereby\.com|meet\.jit\.si|framatalk\.org|8x8\.vc)(?:[:/?#]|$)/i;
+
+// Is this URL a video-conference room (vs. a notes/agenda link)? Exported so
+// the reminder message can label it « Rejoindre la visio ».
+export function isMeetingUrl(url: string): boolean {
+  return MEETING_HOST_RE.test(url);
+}
+
+// Note-taking hosts, preferred when the description holds several links.
+const NOTES_HOST_RE =
+  /^https?:\/\/(?:[\w-]+\.)*(?:notion\.so|notion\.site|pad\.numerique\.gouv\.fr|docs\.numerique\.gouv\.fr|hedgedoc\.[\w.-]+|pad\.[\w.-]+)(?:[:/?#]|$)/i;
 
 export interface CalDavResult {
   ok: boolean;
@@ -240,12 +260,12 @@ function unfold(ical: string): string[] {
 function parseVEvents(ical: string): CalEvent[] {
   const lines = unfold(ical);
   const events: CalEvent[] = [];
-  let cur: Partial<CalEvent> & { attendees: string[] } = { attendees: [] };
+  let cur: EventAcc = { attendees: [], xPropUrls: [], descriptionUrls: [] };
   let inEvent = false;
   for (const line of lines) {
     if (line === "BEGIN:VEVENT") {
       inEvent = true;
-      cur = { attendees: [] };
+      cur = { attendees: [], xPropUrls: [], descriptionUrls: [] };
       continue;
     }
     if (line === "END:VEVENT") {
@@ -283,25 +303,43 @@ function parseVEvents(ical: string): CalEvent[] {
         cur.attendees.push(value.replace(/^mailto:/i, ""));
         break;
       case "DESCRIPTION":
-        if (!cur.meetingUrl) {
-          const url = firstUrl(unescapeText(value));
-          if (url) cur.meetingUrl = url;
-        }
+        // Collect every URL: the conference link is not necessarily the first
+        // one (a description often opens with a link to the meeting notes).
+        cur.descriptionUrls.push(...allUrls(unescapeText(value)));
         break;
       default:
         // X-GOOGLE-CONFERENCE, X-MICROSOFT-SKYPETEAMSMEETINGURL, etc.
-        if (name.startsWith("X-") && !cur.meetingUrl) {
-          const url = firstUrl(value);
-          if (url) cur.meetingUrl = url;
-        }
+        if (name.startsWith("X-")) cur.xPropUrls.push(...allUrls(value));
     }
   }
   return events;
 }
 
-function finalizeEvent(cur: Partial<CalEvent> & { attendees: string[] }): CalEvent {
+// Accumulator while parsing one VEVENT. URLs are kept per source so
+// finalizeEvent can rank them instead of taking whichever came first.
+interface EventAcc extends Partial<CalEvent> {
+  attendees: string[];
+  xPropUrls: string[];
+  descriptionUrls: string[];
+}
+
+function finalizeEvent(cur: EventAcc): CalEvent {
   const location = cur.location ?? "";
-  const meetingUrl = cur.meetingUrl ?? firstUrl(location) ?? "";
+  // Candidates in source order (LOCATION is where La Suite puts the Visio
+  // link), then pick a recognised conference host if there is one — otherwise
+  // fall back to the first URL, as before.
+  const candidates = [
+    ...allUrls(location),
+    ...cur.xPropUrls,
+    ...cur.descriptionUrls,
+  ];
+  const meetingUrl = candidates.find(isMeetingUrl) ?? candidates[0] ?? "";
+  // Notes link: a known note-taking host in the DESCRIPTION, else the first
+  // description link that isn't the conference room we already show.
+  const others = cur.descriptionUrls.filter(
+    (u) => u !== meetingUrl && !isMeetingUrl(u),
+  );
+  const notesUrl = others.find((u) => NOTES_HOST_RE.test(u)) ?? others[0] ?? "";
   return {
     uid: cur.uid ?? "",
     summary: cur.summary ?? "(sans titre)",
@@ -311,12 +349,15 @@ function finalizeEvent(cur: Partial<CalEvent> & { attendees: string[] }): CalEve
     organizer: cur.organizer ?? "",
     attendees: cur.attendees,
     meetingUrl,
+    notesUrl,
   };
 }
 
-function firstUrl(s: string): string {
-  const m = s.match(/https?:\/\/\S+/);
-  return m ? m[0].replace(/[.,;)]+$/, "") : "";
+// Every http(s) URL in a string, trailing punctuation trimmed.
+function allUrls(s: string): string[] {
+  return (s.match(/https?:\/\/\S+/g) ?? []).map((u) =>
+    u.replace(/[.,;)\]>]+$/, ""),
+  );
 }
 
 // Unescape RFC 5545 TEXT values: \\, \; \, \n.

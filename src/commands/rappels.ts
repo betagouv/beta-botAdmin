@@ -5,6 +5,8 @@
 // the message templates. The MatrixConnector wires these to the actual DM
 // send/receive and the CalDAV test + Grist upsert.
 
+import { isMeetingUrl } from "../connectors/caldav.js";
+
 // A user who ran /rappels-calendrier and now owes us a CalDAV URL in their DM.
 interface Pending {
   dmRoomId: string;
@@ -116,7 +118,8 @@ function formatParisTime(d: Date): string {
 
 // The reminder DM sent ~`leadMin` minutes before an event (docs §5.2.5). Shape:
 //   📅 Rappel : *Titre* dans ~15 min (10:30) avec organisateur.
-//   🔗 https://visio…
+//   🔗 [Rejoindre la visio](https://visio…)
+//   📝 [Notes](https://www.notion.so/…)
 export function buildReminderMessage(
   event: {
     summary: string;
@@ -124,6 +127,7 @@ export function buildReminderMessage(
     organizer: string;
     attendees: string[];
     meetingUrl: string;
+    notesUrl?: string;
   },
   leadMin: number,
 ): string {
@@ -134,7 +138,20 @@ export function buildReminderMessage(
       ? ` avec ${event.attendees.length} participant${event.attendees.length > 1 ? "s" : ""}`
       : "";
   const head = `📅 Rappel : **${event.summary}** dans ~${leadMin} min${time}${withWho}.`;
-  return event.meetingUrl ? `${head}\n🔗 ${event.meetingUrl}` : head;
+  const lines = [head];
+  if (event.meetingUrl) {
+    // A recognised conference room gets a short label; any other link is shown
+    // raw so the user sees where it points.
+    const link = isMeetingUrl(event.meetingUrl)
+      ? `[Rejoindre la visio](${event.meetingUrl})`
+      : event.meetingUrl;
+    lines.push(`🔗 ${link}`);
+  }
+  // Notes link (Notion & co), only when it isn't already the link above.
+  if (event.notesUrl && event.notesUrl !== event.meetingUrl) {
+    lines.push(`📝 [Notes](${event.notesUrl})`);
+  }
+  return lines.join("\n");
 }
 
 // Sent once to a user when their calendar link stops working (docs §5.2.7).

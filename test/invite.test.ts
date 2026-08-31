@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseInviteArgs } from "../src/commands/invite.js";
+import { parseInviteArgs, unknownInviteFlags } from "../src/commands/invite.js";
 
 test("parseInviteArgs: startup alone → the current room", () => {
   assert.deepEqual(parseInviteArgs("/invite cartobio"), {
@@ -155,4 +155,83 @@ test("parseInviteArgs: --moderateur does not swallow a following flag", () => {
 test("parseInviteArgs: null when the startup is missing", () => {
   assert.equal(parseInviteArgs("/invite --espace MonEspace"), null);
   assert.equal(parseInviteArgs("/invite --domaine dev"), null);
+});
+
+test("parseInviteArgs: --simuler is a standalone switch", () => {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --simuler"), {
+    startup: "cartobio",
+    simuler: true,
+    target: { kind: "ici" },
+  });
+});
+
+test("parseInviteArgs: --dry-run is accepted as an alias", () => {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --dry-run"), {
+    startup: "cartobio",
+    simuler: true,
+    target: { kind: "ici" },
+  });
+});
+
+test("parseInviteArgs: --simuler combines with domaine, target and moderateur", () => {
+  assert.deepEqual(
+    parseInviteArgs("/invite cartobio --simuler --domaine dev --espace --moderateur"),
+    {
+      startup: "cartobio",
+      domaine: "dev",
+      moderateur: true,
+      simuler: true,
+      target: { kind: "espace-parent" },
+    },
+  );
+});
+
+test("parseInviteArgs: --simuler does not swallow a following flag", () => {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --simuler --salon MonSalon"), {
+    startup: "cartobio",
+    simuler: true,
+    target: { kind: "salon", name: "MonSalon" },
+  });
+});
+
+test("parseInviteArgs: --simuler absent leaves the flag unset", () => {
+  assert.deepEqual(parseInviteArgs("/invite cartobio --domaine dev"), {
+    startup: "cartobio",
+    domaine: "dev",
+    target: { kind: "ici" },
+  });
+});
+
+test("unknownInviteFlags: no flags at all", () => {
+  assert.deepEqual(unknownInviteFlags("/invite cartobio"), []);
+});
+
+test("unknownInviteFlags: every known flag passes", () => {
+  assert.deepEqual(
+    unknownInviteFlags(
+      "/invite cartobio --domaine dev --salon MonSalon --espace --moderateur --simuler",
+    ),
+    [],
+  );
+});
+
+test("unknownInviteFlags: accented and alias spellings pass", () => {
+  assert.deepEqual(unknownInviteFlags("/invite cartobio --modérateur --dry-run"), []);
+  assert.deepEqual(unknownInviteFlags("/invite cartobio --simulation"), []);
+});
+
+test("unknownInviteFlags: a mistyped --simule is reported, not ignored", () => {
+  assert.deepEqual(unknownInviteFlags("/invite cartobio --simule"), ["simule"]);
+});
+
+test("unknownInviteFlags: a mistyped --moderateurs is reported", () => {
+  assert.deepEqual(unknownInviteFlags("/invite cartobio --moderateurs"), ["moderateurs"]);
+});
+
+test("unknownInviteFlags: reports several at once, lowercased", () => {
+  assert.deepEqual(unknownInviteFlags("/invite cartobio --Role dev --xyz"), ["role", "xyz"]);
+});
+
+test("unknownInviteFlags: a flag VALUE is never mistaken for a flag", () => {
+  assert.deepEqual(unknownInviteFlags('/invite cartobio --salon "Mon Salon" --espace !abc:serveur'), []);
 });

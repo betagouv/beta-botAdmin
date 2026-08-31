@@ -27,7 +27,7 @@ import { testAccess } from "../connectors/caldav.js";
 import { upsertInscription, setStatut } from "../tools/rappels-store.js";
 import { runReminderTick } from "../tools/rappels-scheduler.js";
 import { forwardMembresCommand } from "../connectors/n8n.js";
-import { parseInviteArgs, isInviteHelp, buildInviteHelp } from "../commands/invite.js";
+import { parseInviteArgs, isInviteHelp, buildInviteHelp, unknownInviteFlags } from "../commands/invite.js";
 import { resolveInviteTarget, canInvite, canPromote } from "../commands/rooms.js";
 import { buildHelp, buildOpsHelp } from "../tools/help.js";
 
@@ -1170,6 +1170,21 @@ export class MatrixConnector {
           record({ user: sender, room: roomId, kind: "slash", text, status: "error", detail: "invite bad-syntax" });
           return;
         }
+        // Une option inconnue arrête tout. L'ignorer en silence ferait partir
+        // les invitations que l'utilisateur croyait justement neutraliser
+        // (`--simule` au lieu de `--simuler`, par exemple).
+        const inconnus = unknownInviteFlags(text);
+        if (inconnus.length > 0) {
+          await this.sendReaction(roomId, userEventId, "❌");
+          await this.sendMessage(
+            roomId,
+            `❌ Option inconnue : ${inconnus.map((f) => `\`--${f}\``).join(", ")}.\n\nOptions reconnues : \`--domaine\`, \`--salon\`, \`--espace\`, \`--moderateur\`, \`--simuler\`. Aide : \`/invite help\`.`,
+            userEventId,
+            threadRoot,
+          );
+          record({ user: sender, room: roomId, kind: "slash", text, status: "error", detail: `invite unknown-flag ${inconnus.join(",")}` });
+          return;
+        }
         const target = await resolveInviteTarget(
           this.client,
           config.matrix.managedSpace,
@@ -1214,6 +1229,30 @@ export class MatrixConnector {
             record({ user: sender, room: roomId, kind: "slash", text, status: "refused", detail: `promote ${promo.reason}` });
             return;
           }
+        }
+        // `--simuler` : répétition générale. Tout ce qui précède (résolution de
+        // la cible, droits d'invitation, droit de promotion) a déjà tourné pour
+        // de vrai ; on s'arrête ici, avant le seul appel qui invite. n8n n'est
+        // pas contacté du tout, donc aucune invitation ne peut partir.
+        if (parsed.simuler) {
+          const lignes = [
+            `🧪 **Simulation** — aucune invitation envoyée, le service n'a pas été contacté.`,
+            "",
+            `| | |`,
+            `|---|---|`,
+            `| Startup | \`${parsed.startup}\` |`,
+            `| Domaine | ${parsed.domaine ? `\`${parsed.domaine}\`` : "_tous_"} |`,
+            `| Cible | ${target.label} (\`${target.roomId}\`) |`,
+            `| Tes droits | ✅ tu peux inviter${parsed.moderateur ? " et promouvoir modérateur" : ""} |`,
+            "",
+            `Pour l'exécuter réellement, retire \`--simuler\` :`,
+            "",
+            `\`@betabot ${text.replace(/\s*--(?:simuler|simulation|dry-run)\b/i, "")}\``,
+          ];
+          await this.sendReaction(roomId, userEventId, "🧪");
+          await this.sendMessage(roomId, lignes.join("\n"), userEventId, threadRoot);
+          record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "invite simulation" });
+          return;
         }
         const reply = await forwardMembresCommand({
           command: "/invite",

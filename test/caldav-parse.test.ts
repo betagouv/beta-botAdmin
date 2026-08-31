@@ -94,3 +94,84 @@ test("parseMultistatus: unescapes TEXT and pulls a URL from DESCRIPTION", () => 
   assert.equal(e.start?.toISOString(), "2026-07-15T16:00:00.000Z");
   assert.equal(e.meetingUrl, "https://meet.example.org/xyz");
 });
+
+// Real-world shape: LOCATION holds the Visio room, DESCRIPTION holds a link to
+// the meeting notes. The Visio link must win.
+test("parseMultistatus: LOCATION visio beats a DESCRIPTION notes link", () => {
+  const ical = `<cal:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:hebdo@example.org
+SUMMARY:Hebdo raccourci équipe animation
+DTSTART:20260723T120000Z
+LOCATION:https://visio.numerique.gouv.fr/uba-nsor-unf
+DESCRIPTION:Les notes sont prises sur https://www.notion.so/betagouv/R-unions
+END:VEVENT
+END:VCALENDAR
+</cal:calendar-data>`;
+  const [e] = parseMultistatus(ical);
+  assert.equal(e.meetingUrl, "https://visio.numerique.gouv.fr/uba-nsor-unf");
+  assert.equal(e.notesUrl, "https://www.notion.so/betagouv/R-unions");
+});
+
+test("parseMultistatus: notesUrl prefers a known notes host in DESCRIPTION", () => {
+  const ical = `<cal:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:notes@example.org
+SUMMARY:Point
+DTSTART:20260723T120000Z
+LOCATION:https://visio.numerique.gouv.fr/abc
+DESCRIPTION:Ticket https://github.com/betagouv/x/issues/1 — notes https://www.notion.so/betagouv/page
+END:VEVENT
+END:VCALENDAR
+</cal:calendar-data>`;
+  const [e] = parseMultistatus(ical);
+  assert.equal(e.notesUrl, "https://www.notion.so/betagouv/page");
+});
+
+test("parseMultistatus: notesUrl is empty when the only link is the visio", () => {
+  const ical = `<cal:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:solo@example.org
+SUMMARY:Point
+DTSTART:20260723T120000Z
+LOCATION:https://visio.numerique.gouv.fr/abc
+DESCRIPTION:On se retrouve en visio https://visio.numerique.gouv.fr/abc
+END:VEVENT
+END:VCALENDAR
+</cal:calendar-data>`;
+  const [e] = parseMultistatus(ical);
+  assert.equal(e.notesUrl, "");
+});
+
+// Same, but the conference link only appears in the DESCRIPTION, after another
+// link: source order must not beat host recognition.
+test("parseMultistatus: a conference host wins wherever it appears", () => {
+  const ical = `<cal:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:mix@example.org
+SUMMARY:Point
+DTSTART:20260723T120000Z
+LOCATION:Salle 3\\, 2e étage — https://intranet.example.org/salles
+DESCRIPTION:Ordre du jour: https://pad.example.org/x puis https://meet.google.com/abc-defg-hij
+END:VEVENT
+END:VCALENDAR
+</cal:calendar-data>`;
+  const [e] = parseMultistatus(ical);
+  assert.equal(e.meetingUrl, "https://meet.google.com/abc-defg-hij");
+});
+
+// No recognised host anywhere: keep the previous behaviour (first URL found,
+// LOCATION first).
+test("parseMultistatus: falls back to the first URL when no known host", () => {
+  const ical = `<cal:calendar-data>BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:fallback@example.org
+SUMMARY:Point
+DTSTART:20260723T120000Z
+DESCRIPTION:Notes https://pad.example.org/x
+END:VEVENT
+END:VCALENDAR
+</cal:calendar-data>`;
+  const [e] = parseMultistatus(ical);
+  assert.equal(e.meetingUrl, "https://pad.example.org/x");
+});

@@ -24,6 +24,10 @@ export interface InviteArgs {
   // `--moderateur`: also raise every invited member to moderator (power 50).
   // Gated behind a stricter permission check than the invitation itself.
   moderateur?: boolean;
+  // `--simuler`: resolve the target and run the permission checks, then stop
+  // and report — without ever contacting n8n, so nobody is invited. The point
+  // is to rehearse a command in the real room before running it for real.
+  simuler?: boolean;
   target: InviteTarget;
 }
 
@@ -47,6 +51,7 @@ export function buildInviteHelp(): string {
     "| `@betabot /invite <startup> --espace <!id:serveur>` | Invite la startup dans l'**espace** d'ID donné |",
     "| `@betabot /invite <startup> --domaine <domaine>` | N'invite que les membres de ce **domaine** |",
     "| `@betabot /invite <startup> --moderateur` | Invite **et** passe chacun **modérateur** |",
+    "| `@betabot /invite <startup> --simuler` | **N'invite personne** : affiche ce que ferait la commande |",
     "| `@betabot /invite help` | Affiche cette aide |",
     "",
     "- Le nom de la startup vient **en premier**, avant les options.",
@@ -59,8 +64,9 @@ export function buildInviteHelp(): string {
     "- Le salon/espace visé est cherché **sous l'espace géré**.",
     "- Tu dois avoir le **droit d'inviter** dans le salon/espace ciblé — être simple membre ne suffit pas si le salon réserve l'invitation aux modérateurs.",
     "- `--moderateur` exige que tu sois **toi-même modérateur** (niveau ≥ 50) dans la cible : on ne donne pas un pouvoir qu'on n'a pas.",
+    "- `--simuler` (ou `--dry-run`) fait une **répétition** : le bot résout la cible et vérifie tes droits, puis s'arrête. Aucune invitation n'est envoyée, le service n'est même pas contacté.",
     "",
-    "**Exemple** : depuis un salon de l'espace, `@betabot /invite cartobio --espace --domaine dev`",
+    "**Exemple** : depuis un salon de l'espace, `@betabot /invite api-engagement --espace --domaine dev`",
   ].join("\n");
 }
 
@@ -76,11 +82,41 @@ function grabFlag(raw: string, flag: string): string | null {
   return m[1] ? m[1].replace(/^["']|["']$/g, "") : "";
 }
 
+// Every flag `/invite` understands, in every accepted spelling.
+const FLAGS_CONNUS = new Set([
+  "domaine",
+  "salon",
+  "espace",
+  "moderateur",
+  "modérateur",
+  "simuler",
+  "simulation",
+  "dry-run",
+]);
+
+// Flags typed by the user that `/invite` does not know. An unknown flag must be
+// an error, never a silent no-op: a mistyped `--simule` that we quietly ignore
+// would send the real invitations the user was trying to avoid. Same reasoning
+// for a mistyped `--moderateur`, in the other direction.
+export function unknownInviteFlags(text: string): string[] {
+  const raw = text.replace(/^\/invite\s*/i, "").trim();
+  const firstFlag = raw.search(/(?:^|\s)--/);
+  if (firstFlag === -1) return [];
+  const flags = raw.slice(firstFlag);
+  const inconnus: string[] = [];
+  for (const m of flags.matchAll(/(?:^|\s)--([\p{L}\d-]+)/gu)) {
+    const nom = m[1]!.toLowerCase();
+    if (!FLAGS_CONNUS.has(nom)) inconnus.push(nom);
+  }
+  return inconnus;
+}
+
 // Parse `/invite <startup> [--domaine <domaine>] [--salon <nom> | --espace [<nom>]]`.
 // The startup is mandatory and positional; the rest is optional and
 // order-independent:
 //   --domaine <domaine>             → only that domaine within the startup
 //   --moderateur                    → also promote them to moderator (power 50)
+//   --simuler | --dry-run           → rehearse only: never contacts n8n
 //   --salon <nom>                   → that room, by name or id
 //   --espace <!id:serveur>          → that space, by ID only
 //   --espace       (no value)       → the space holding the current room
@@ -103,11 +139,15 @@ export function parseInviteArgs(text: string): InviteArgs | null {
   // Standalone switch, no value. Both spellings accepted — people type it both
   // ways and a silent no-op on an accent would be a nasty surprise.
   const moderateur = /(?:^|\s)--mod[eé]rateur\b/i.test(flags);
+  // Rehearsal switch. Both spellings accepted; `--dry-run` is what people who
+  // already know the concept reach for first.
+  const simuler = /(?:^|\s)--(?:simuler|simulation|dry-run)\b/i.test(flags);
   // A bare `--domaine` carries no value, so it means "everybody" like an absent one.
   const base = {
     startup,
     ...(domaine ? { domaine } : {}),
     ...(moderateur ? { moderateur: true } : {}),
+    ...(simuler ? { simuler: true } : {}),
   };
   if (salon) return { ...base, target: { kind: "salon", name: salon } };
   if (espace) return { ...base, target: { kind: "espace", id: espace } };
