@@ -850,13 +850,13 @@ export class MatrixConnector {
     // of a real pill is identical to hand-typed text, so it can't be trusted.
     const mentionUserIds = content["m.mentions"]?.user_ids ?? [];
     // Names a typed plain-text "@name" must match EXACTLY (case-insensitive) to
-    // count as a mention: the full localpart, the full display name, and the
-    // first alphanumeric run of each (e.g. localpart "betabotadmin-beta.gouv.fr"
-    // and display name "Betabot+admin [Beta]" both yield the root "betabot", so
-    // typing exactly "@betabot" is a mention). Prefixes like "@beta" do NOT
-    // match — exact equality avoids false positives from incidental "@beta" text.
+    // count as a mention: the full localpart and the full display name, plus the
+    // display name truncated at its first whitespace (e.g. "Betabot+admin [Beta]"
+    // → "@betabot+admin"). The `+`, `-`, `.` and `_` are kept so the real handle
+    // is matched as a whole — "@betabot" (a mere prefix) does NOT count, only the
+    // complete "betabot+admin" handle triggers the bot.
     const firstRun = (s: string): string =>
-      s.toLowerCase().match(/^[\p{L}\p{N}]+/u)?.[0] ?? s.toLowerCase();
+      s.toLowerCase().match(/^[\p{L}\p{N}._+-]+/u)?.[0] ?? s.toLowerCase();
     const mentionNames = [localPart, this.ownDisplayName]
       .filter((p): p is string => !!p)
       .flatMap((name) => [name.toLowerCase(), firstRun(name)]);
