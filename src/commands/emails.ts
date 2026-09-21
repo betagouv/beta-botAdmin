@@ -16,8 +16,7 @@ const HELP = `📖 **Commandes \`/emails\` disponibles**
 **Format \`<liste>\`** : nom simple (\`cartobio\` → \`cartobio@${config.dimail.domain ?? "<DIMAIL_DOMAIN non configuré>"}\`) ou adresse complète (\`contact@beta.gouv.fr\`). On ne gère que les adresses \`beta.gouv.fr\`.
 
 **Exemples**
-- \`/emails join cartobio jean.louis@beta.gouv.fr\` → ajoute à \`cartobio@${config.dimail.domain ?? "<DIMAIL_DOMAIN non configuré>"}\`
-- \`/emails join contact@covoiturage.beta.gouv.fr jean.louis@beta.gouv.fr\` → adresse complète pour sous-domaine`;
+- \`/emails join cartobio jean.louis@beta.gouv.fr\` → ajoute à \`cartobio@${config.dimail.domain ?? "<DIMAIL_DOMAIN non configuré>"}\``;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const LIST_NAME_RE = /^[a-z0-9._-]+$/i;
