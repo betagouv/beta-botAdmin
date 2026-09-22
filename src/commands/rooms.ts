@@ -2,6 +2,7 @@ import type { MatrixClient } from "matrix-bot-sdk";
 import { config } from "../config.js";
 import { addCreatedRoom, removeCreatedRoom } from "./created-rooms.js";
 import type { InviteTarget } from "./invite.js";
+import { unknownFlags, unknownFlagsMessage } from "./flags.js";
 
 // Manage rooms inside a single configured Space (MATRIX_MANAGED_SPACE):
 // create a room attached to the space, or "close" one (detach + kick + leave).
@@ -9,6 +10,12 @@ import type { InviteTarget } from "./invite.js";
 
 // A requester must have at least this power level in a room to close it.
 const MODERATOR_POWER_LEVEL = 50;
+
+// Options the two `create` sub-commands understand. Anything else is refused:
+// whatever is not a known flag is read as part of the name, so a mistyped
+// `--startip` would both skip the invitations and end up in the room title.
+const FLAGS_SALON_CREATE = ["clair", "startup", "role"] as const;
+const FLAGS_ESPACE_CREATE = ["clair"] as const;
 
 export interface RoomCmdResult {
   reaction: string;
@@ -475,6 +482,123 @@ export function parseRoomAndSpace(cleaned: string): {
   return { roomName: cleaned, spaceCandidate: null, explicit: false };
 }
 
+// The power levels that leave a moderator (50) in charge of everything the
+// room can delegate. Nothing is left above 50: every threshold and every event
+// the homeserver named is brought down to it — including the types we don't
+// know about (`im.vector.*`, `m.room.retention`, whatever Tchap adds next).
+// Naming a list would have left exactly those behind.
+//
+// A level below 50 is kept as it is: the point is to stop reserving rights to
+// an admin, not to restrict what members can already do (`events_default` and
+// `users_default` are untouched, so ordinary members keep talking).
+//
+// Matrix auth rules still cap a level-50 user — they cannot grant a level above
+// their own nor touch a user sitting higher — so the bot (100) stays out of
+// reach and remains able to close the room.
+//
+// The named events below are forced in even when the server left them implicit,
+// so the room states its own permissions instead of relying on `state_default`.
+// `m.space.child` / `m.space.parent` are what made this necessary: the Tchap
+// homeserver creates a space with `state_default: 100`, and without them the
+// person who just ran `/espace create` cannot add a single room to their espace.
+const ETATS_DELEGUES = [
+  "m.room.name",
+  "m.room.topic",
+  "m.room.avatar",
+  "m.room.canonical_alias",
+  "m.room.history_visibility",
+  "m.room.encryption",
+  "m.room.join_rules",
+  "m.room.power_levels",
+  "m.room.server_acl",
+  "m.room.tombstone",
+  "m.space.child",
+  "m.space.parent",
+] as const;
+
+export function moderatorPowerLevels(
+  current: Record<string, unknown> & {
+    events?: Record<string, number>;
+    notifications?: Record<string, number>;
+  },
+): Record<string, unknown> {
+  const p = MODERATOR_POWER_LEVEL;
+  // Lower to 50, never raise: a right already open to everyone stays open.
+  const abaisse = (v: unknown): number =>
+    typeof v === "number" && v < p ? v : p;
+  const abaisseTout = (m: Record<string, number> | undefined) =>
+    Object.fromEntries(Object.entries(m ?? {}).map(([k, v]) => [k, abaisse(v)]));
+
+  const events = abaisseTout(current.events);
+  for (const e of ETATS_DELEGUES) events[e] ??= p;
+
+  return {
+    ...current,
+    state_default: abaisse(current["state_default"]),
+    ban: abaisse(current["ban"]),
+    kick: abaisse(current["kick"]),
+    redact: abaisse(current["redact"]),
+    invite: abaisse(current["invite"]),
+    events,
+    // `@room` is a right like any other; a server that reserves it to an admin
+    // would otherwise slip through.
+    ...(current.notifications
+      ? { notifications: abaisseTout(current.notifications) }
+      : {}),
+  };
+}
+
+// Apply those levels to a freshly created room or space. Sent as a follow-up
+// event because Synapse rejects a full power-level override at create time.
+// Returns false when the homeserver refused: the caller says so in its reply
+// rather than leaving someone with a room they silently cannot manage.
+async function grantModeratorRights(
+  client: MatrixClient,
+  roomId: string,
+): Promise<boolean> {
+  try {
+    const pl = (await client.getRoomStateEvent(
+      roomId,
+      "m.room.power_levels",
+      "",
+    )) as Record<string, unknown> & { events?: Record<string, number> };
+    await client.sendStateEvent(
+      roomId,
+      "m.room.power_levels",
+      "",
+      moderatorPowerLevels(pl),
+    );
+    return true;
+  } catch (err) {
+    console.error(`[rooms] power levels not applied on ${roomId}:`, err);
+    return false;
+  }
+}
+
+// Spell out what the creator just received. Power levels are invisible in the
+// Tchap UI until you open the room settings, so nobody discovers a missing
+// right before the day they need it.
+function rightsLine(kind: "salon" | "espace", ok: boolean): string {
+  const cible = kind === "salon" ? "ce salon" : "cet espace";
+  if (!ok) {
+    return (
+      `\n\n⚠️ Je n'ai pas réussi à poser tes droits sur ${cible} : tu y es ` +
+      `**modérateur** (niveau 50), mais plusieurs réglages y restent réservés ` +
+      `au niveau 100. Demande à un admin d'ajuster les permissions — ` +
+      `relancer la commande ne suffira pas, ${cible} existe déjà.`
+    );
+  }
+  const quoi =
+    kind === "salon"
+      ? "renommer, changer le sujet et l'avatar, inviter, expulser, bannir, effacer des messages, régler l'historique"
+      : "renommer, inviter, **y ajouter ou en retirer des salons**, expulser, régler l'accès";
+  return (
+    `\n\n🔑 Tu es **modérateur** (niveau 50) sur ${cible} : ${quoi}, et ` +
+    `nommer d'autres modérateurs. Seul le bot est **admin** (niveau 100) : ` +
+    `pour le reste, passe par lui ou par un admin de l'espace.`
+  );
+}
+
 async function createRoom(
   client: MatrixClient,
   spaceId: string,
@@ -545,42 +669,7 @@ async function createRoom(
     ],
   });
 
-  // Lower every threshold so a moderator (50) has all possible rights: room
-  // settings, kick/ban/redact/invite, and even power_levels / server_acl /
-  // tombstone. Matrix auth rules still cap what a level-50 user can do with
-  // power_levels: they can't grant above their own level nor touch users at a
-  // higher level, so the bot (100) stays safe. Done as a follow-up event
-  // because Synapse rejects a full power-level override at create time.
-  try {
-    const pl = (await client.getRoomStateEvent(
-      roomId,
-      "m.room.power_levels",
-      "",
-    )) as Record<string, unknown> & { events?: Record<string, number> };
-    await client.sendStateEvent(roomId, "m.room.power_levels", "", {
-      ...pl,
-      state_default: MODERATOR_POWER_LEVEL,
-      ban: MODERATOR_POWER_LEVEL,
-      kick: MODERATOR_POWER_LEVEL,
-      redact: MODERATOR_POWER_LEVEL,
-      invite: MODERATOR_POWER_LEVEL,
-      events: {
-        ...(pl.events ?? {}),
-        "m.room.name": MODERATOR_POWER_LEVEL,
-        "m.room.topic": MODERATOR_POWER_LEVEL,
-        "m.room.avatar": MODERATOR_POWER_LEVEL,
-        "m.room.canonical_alias": MODERATOR_POWER_LEVEL,
-        "m.room.history_visibility": MODERATOR_POWER_LEVEL,
-        "m.room.encryption": MODERATOR_POWER_LEVEL,
-        "m.room.join_rules": MODERATOR_POWER_LEVEL,
-        "m.room.power_levels": MODERATOR_POWER_LEVEL,
-        "m.room.server_acl": MODERATOR_POWER_LEVEL,
-        "m.room.tombstone": MODERATOR_POWER_LEVEL,
-      },
-    });
-  } catch {
-    // room is still usable with default levels if this step fails
-  }
+  const rightsOk = await grantModeratorRights(client, roomId);
 
   // Attach the room to the space (needs power in the space — checked at startup).
   await client.sendStateEvent(spaceId, "m.space.child", roomId, {
@@ -592,7 +681,7 @@ async function createRoom(
 
   return {
     reaction: "✅",
-    message: `🏠 Salon ${roomLink(roomId, `**${name}**`)} créé (${encrypted ? "privé, chiffré" : "public, non chiffré"}) et rattaché à ${where}. Clique pour y aller.`,
+    message: `🏠 Salon ${roomLink(roomId, `**${name}**`)} créé (${encrypted ? "privé, chiffré" : "public, non chiffré"}) et rattaché à ${where}. Clique pour y aller.${rightsLine("salon", rightsOk)}`,
     createdRoomId: roomId,
     targetLabel: `le salon **${name}**`,
   };
@@ -656,6 +745,8 @@ async function createSpace(
     ],
   });
 
+  const rightsOk = await grantModeratorRights(client, spaceId);
+
   // Attach the new space as a child of the managed space.
   await client.sendStateEvent(parentSpaceId, "m.space.child", spaceId, {
     via: [serverName(spaceId)],
@@ -668,7 +759,7 @@ async function createSpace(
     reaction: "✅",
     // The space name is a clickable pill; the raw ID is kept because
     // `/invite --espace <id>` needs it (a space has no composer to read it from).
-    message: `🌌 Espace ${roomLink(spaceId, `**${name}**`)} créé (${encrypted ? "privé" : "public"}) et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID (pour \`/invite --espace\`) : \`${spaceId}\``,
+    message: `🌌 Espace ${roomLink(spaceId, `**${name}**`)} créé (${encrypted ? "privé" : "public"}) et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID (pour \`/invite --espace\`) : \`${spaceId}\`${rightsLine("espace", rightsOk)}`,
   };
 }
 
@@ -879,7 +970,11 @@ function helpMessage(): RoomCmdResult {
 | \`/salon delete <nom>\` | Ferme le salon de l'espace géré : détache + expulse les membres + le bot quitte |
 | \`/salon delete <nom> <espace>\` | Idem, mais cible le salon situé dans le sous-espace **<espace>** (pour lever l'ambiguïté si le même nom existe ailleurs). Espace avec des espaces : entre guillemets |
 
-Le \`<nom>\` peut contenir des espaces. Pour cibler un **<espace>** dont le nom contient des espaces, mets-le entre guillemets en dernier (\`"Pole Tech"\`) ; sinon le dernier mot est traité comme **<espace>** seulement s'il correspond au **nom ou à l'ID** d'un sous-espace existant (voir \`/espace list\`).`,
+Le \`<nom>\` peut contenir des espaces. Pour cibler un **<espace>** dont le nom contient des espaces, mets-le entre guillemets en dernier (\`"Pole Tech"\`) ; sinon le dernier mot est traité comme **<espace>** seulement s'il correspond au **nom ou à l'ID** d'un sous-espace existant (voir \`/espace list\`).
+
+## Tes droits sur un salon que tu crées
+
+Tu es **modérateur** (niveau 50) : renommer, sujet, avatar, inviter, expulser, bannir, effacer des messages, régler l'historique et l'accès, et nommer d'autres modérateurs. Seul le bot est **admin** (niveau 100) — tu ne peux donc ni créer un autre admin, ni le retirer du salon.`,
   };
 }
 
@@ -899,7 +994,11 @@ function spacesHelpMessage(): RoomCmdResult {
 
 Le \`<nom>\` peut contenir des espaces. Pour cibler un **<espace-parent>** dont le nom contient des espaces, mets-le entre guillemets en dernier ; sinon le dernier mot est traité comme parent seulement s'il correspond au nom ou à l'ID d'un sous-espace existant.
 
-Ensuite, range un salon dedans : \`/salon create <nom-salon> <nom-espace>\`.`,
+Ensuite, range un salon dedans : \`/salon create <nom-salon> <nom-espace>\`.
+
+## Tes droits sur un espace que tu crées
+
+Tu es **modérateur** (niveau 50) : renommer, inviter, **y ajouter ou en retirer des salons**, expulser, régler l'accès, et nommer d'autres modérateurs. Seul le bot est **admin** (niveau 100).`,
   };
 }
 
@@ -952,6 +1051,16 @@ export async function handleSpacesCommand(
           return {
             reaction: "❌",
             message: '❌ Usage : `/espace create <nom> ["espace-parent"] [--clair]`',
+          };
+        const inconnusEspace = unknownFlags(rawArg, new Set(FLAGS_ESPACE_CREATE));
+        if (inconnusEspace.length > 0)
+          return {
+            reaction: "❌",
+            message: unknownFlagsMessage(
+              inconnusEspace,
+              FLAGS_ESPACE_CREATE,
+              "/espace help",
+            ),
           };
         // `--clair` (anywhere) makes the space public instead of private. Strip
         // it out before parsing name/parent so it never lands in either. Mirrors
@@ -1093,6 +1202,16 @@ export async function handleRoomsCommand(
             reaction: "❌",
             message:
               "❌ Usage : `/salon create <nom> [\"espace\"] [--clair] [--startup <startup>] [--role <role>]`",
+          };
+        const inconnusSalon = unknownFlags(rawArg, new Set(FLAGS_SALON_CREATE));
+        if (inconnusSalon.length > 0)
+          return {
+            reaction: "❌",
+            message: unknownFlagsMessage(
+              inconnusSalon,
+              FLAGS_SALON_CREATE,
+              "/salon help",
+            ),
           };
         // Extract `--startup <nom>` and `--role <role>` (both optional): after
         // creation, the connector invites that startup via n8n. Pulled out

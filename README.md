@@ -4,20 +4,26 @@ Self-hosted **command-only** Matrix/[Tchap](https://tchap.gouv.fr) bot for the [
 
 It handles slash commands only (room management, mailing lists, history) — it does **not** chat in natural language. Any DM or @mention that isn't a command gets a generic reply pointing to the command room and an optional contact.
 
-Detailed specs : [./specs](./specs)
-
 ---
 
 ## Commands
 
 | Command | What it does | Who | Where |
 |---|---|---|---|
-| `/help` (or `/aide`) | Shows the help: all commands and their parameters | Everyone | Command rooms |
-| `/emails …` | Manage DiMail mailing lists (`list` / `create` / `join` / `leave`) | Everyone | DiMail rooms |
-| `/salon …` | Manage rooms in a Space (`list` / `create` / `delete` / `role`) | Everyone (`delete` = moderator+, `role` = admin) | Command rooms |
+| `/help` (or `/aide`) | Shows the help: all commands and their parameters | Everyone | Command rooms + OPS rooms |
+| `/emails …` | Manage DiMail mailing lists (`list` / `create` / `join` / `leave`) | Everyone | Command rooms |
+| `/salon …` | Manage rooms in a Space (`list` / `create` / `delete`) | Everyone (`delete` = moderator+) | Command rooms |
+| `/espace …` | Manage sub-spaces (`list` / `create` / `delete`) | Everyone (`delete` = allow-listed, in DM) | Command rooms |
+| `/invite <startup>` | Invite a startup's members into a room or space, via n8n | Everyone (needs invite rights in the **target**) | Anywhere — the target's permissions are the boundary |
+| `/rappels-calendrier` (or `/rappels`) | Subscribe to meeting reminders; the setup happens in DM | Everyone | Command rooms + OPS rooms |
+| `/rappels-stop` | Unsubscribe from meeting reminders | Everyone | Command rooms + OPS rooms |
 | `/historique [filter]` | Last 20 interactions, sent in DM | **Admin only** | Command rooms |
 
-`/historique` and `/salon role` are admin-only and not advertised in `/help`. Type `/help` in a command room for the full, always-up-to-date reference.
+`/historique` is admin-only and not advertised in `/help`. Type `/help` in a command room for the full, always-up-to-date reference.
+
+When the bot creates a room or a space, the requester is made **moderator (50)** and the bot stays **admin (100)**. Every threshold in the new room is lowered to 50, so a moderator can rename it, set the topic/avatar/history/join rules, invite, kick, ban, redact, add or remove rooms from a space, and appoint other moderators. Matrix auth rules stop them there: a level-50 user cannot grant a level above their own, so only the bot can create another admin or be removed. If the homeserver refuses that adjustment, the bot says so in its reply instead of leaving a room nobody can manage.
+
+In the OPS rooms (`MATRIX_OPS_ROOMS`), `/help` shows how to file an OPS request instead of the bot help, and only the `/rappels-*` pair works besides it — every other message is ignored silently.
 
 ---
 
@@ -58,9 +64,9 @@ cp .env.example .env
 | `MATRIX_COMMAND_ROOMS` | — | Rooms where slash commands are accepted. Empty = allowed wherever the bot responds. |
 | `MATRIX_COMMAND_ROOMS_LABEL` | — | Human-readable name shown instead of the raw room ID when a command is refused (e.g. `Salon Admin betabot`). |
 | `MATRIX_CONTACT` | — | Contact shown in the generic reply when someone DMs or @mentions the bot outside a command. Empty = the contact line is omitted. |
-| `MATRIX_DIMAIL_ROOMS` | — | Rooms where the `/emails` (DiMail) command is available. Empty = DiMail disabled. |
-| `MATRIX_ADMIN_USERS` | — | Comma-separated Matrix IDs allowed to run admin commands (`/historique`, `/salon role`). Empty = nobody. |
-| `MATRIX_MANAGED_SPACE` | — | Space the bot may create/close rooms in via `/salon`. The bot needs power ≥ the space's `m.space.child` level (usually 100). Empty = `/salon` disabled. |
+| `MATRIX_ADMIN_USERS` | — | Comma-separated Matrix IDs allowed to run admin commands (`/historique`). Empty = nobody. |
+| `MATRIX_MANAGED_SPACE` | — | Space the bot may create/close rooms in via `/salon` and `/espace`. The bot needs power ≥ the space's `m.space.child` level (usually 100). Empty = `/salon` and `/espace` disabled. |
+| `MATRIX_OPS_ROOMS` | — | Rooms where `/help` returns the OPS-request help and only `/rappels-calendrier` / `/rappels-stop` also work. |
 | `DIMAIL_URL` | — | DiMail API base URL (mailing lists / aliases). |
 | `DIMAIL_USER` / `DIMAIL_PASSWORD` | — | DiMail credentials; used to fetch a token when `DIMAIL_TOKEN` is empty. |
 | `DIMAIL_DOMAIN` | — | Default mail domain used to resolve a bare list name (e.g. `cartobio` → `cartobio@<domain>`). |

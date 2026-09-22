@@ -38,7 +38,6 @@ export const config = {
     dmTestUsers: optionalList("MATRIX_DM_TEST_USERS"),
     commandRoomsLabel: process.env["MATRIX_COMMAND_ROOMS_LABEL"],
     commandRoomsUrl: process.env["MATRIX_COMMAND_ROOMS_URL"],
-    dimailRooms: optionalList("MATRIX_DIMAIL_ROOMS"),
     // Rooms where `/help` returns the OPS-request help (how to make a demande
     // d'OPS) and is open to everyone — even if the room is not in
     // MATRIX_COMMAND_ROOMS. Comma-separated room IDs.
@@ -51,7 +50,7 @@ export const config = {
     allowSelfCommands: process.env["MATRIX_ALLOW_SELF_COMMANDS"] === "true",
     // Accounts whose slash commands are accepted in rooms WITHOUT @mentioning
     // the bot (e.g. an n8n automation account). All other checks still apply
-    // (command rooms, email domain, admin). Override via MATRIX_NO_MENTION_USERS
+    // (command rooms, admin). Override via MATRIX_NO_MENTION_USERS
     // (comma-separated mxids).
     noMentionUsers:
       optionalList("MATRIX_NO_MENTION_USERS").length > 0

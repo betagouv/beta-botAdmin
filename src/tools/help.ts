@@ -70,6 +70,8 @@ Une commande **de base** par ligne (la plus courante). Toutes les variantes et o
 | \`@betabot /salon create <nom>\` | Crée un salon dans l'espace géré | \`@betabot /salon help\` |
 | \`@betabot /espace create <nom>\` | Crée un sous-espace | \`@betabot /espace help\` |
 | \`@betabot /invite <startup>\` | Invite une startup dans le salon où tu tapes | \`@betabot /invite help\` |
+| \`@betabot /rappels-calendrier\` | Active les rappels avant tes réunions (réglage en MP) | — |
+| \`@betabot /rappels-stop\` | Coupe tes rappels de réunion | — |
 
 > ⚠️ Un texte sans commande ne renvoie qu'un message générique, et sans \`@\` ni \`/\` dans un salon je reste silencieux.
 
