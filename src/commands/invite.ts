@@ -2,6 +2,8 @@
 // The bot parses + resolves the target room, then forwards to n8n (which reads
 // the startup's members and performs the invitations).
 
+import { unknownFlags } from "./flags.js";
+
 // Where the invitations land. `ici` and `espace-parent` need no name: they are
 // resolved from the room the command was typed in. `espace-parent` exists
 // because no Matrix client offers a composer for a space, so a space can never
@@ -94,21 +96,10 @@ const FLAGS_CONNUS = new Set([
   "dry-run",
 ]);
 
-// Flags typed by the user that `/invite` does not know. An unknown flag must be
-// an error, never a silent no-op: a mistyped `--simule` that we quietly ignore
-// would send the real invitations the user was trying to avoid. Same reasoning
-// for a mistyped `--moderateur`, in the other direction.
+// Flags typed by the user that `/invite` does not know. See commands/flags.ts
+// for why an unknown flag has to be an error rather than a silent no-op.
 export function unknownInviteFlags(text: string): string[] {
-  const raw = text.replace(/^\/invite\s*/i, "").trim();
-  const firstFlag = raw.search(/(?:^|\s)--/);
-  if (firstFlag === -1) return [];
-  const flags = raw.slice(firstFlag);
-  const inconnus: string[] = [];
-  for (const m of flags.matchAll(/(?:^|\s)--([\p{L}\d-]+)/gu)) {
-    const nom = m[1]!.toLowerCase();
-    if (!FLAGS_CONNUS.has(nom)) inconnus.push(nom);
-  }
-  return inconnus;
+  return unknownFlags(text.replace(/^\/invite\s*/i, ""), FLAGS_CONNUS);
 }
 
 // Parse `/invite <startup> [--domaine <domaine>] [--salon <nom> | --espace [<nom>]]`.

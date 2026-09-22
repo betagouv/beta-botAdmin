@@ -34,8 +34,6 @@ import { buildHelp, buildOpsHelp } from "../tools/help.js";
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
 // out — it still works (handled explicitly below) but isn't advertised.
-// Publicly advertised commands (shown in /help, the generic notice and the
-// "unknown command" hint).
 const KNOWN_COMMANDS = [
   "/help",
   "/emails",
@@ -43,7 +41,24 @@ const KNOWN_COMMANDS = [
   "/espace",
   "/invite",
   "/rappels-calendrier",
+  "/rappels-stop",
 ] as const;
+
+// `/rappels-calendrier` (and its short alias `/rappels`) with or without args,
+// and its opposite `/rappels-stop`. Both are recognised in two places — the OPS
+// rooms and the regular dispatch — so the spellings live in one place.
+function isRappelsStart(text: string): boolean {
+  return (
+    text === "/rappels-calendrier" ||
+    text === "/rappels" ||
+    text.startsWith("/rappels-calendrier ") ||
+    text.startsWith("/rappels ")
+  );
+}
+
+function isRappelsStop(text: string): boolean {
+  return text === "/rappels-stop" || text.startsWith("/rappels-stop ");
+}
 
 function levenshtein(a: string, b: string): number {
   if (a === b) return 0;
@@ -956,10 +971,12 @@ export class MatrixConnector {
 
     const userEventId = event.event_id as string;
 
-    // OPS rooms: only `/help` (or `/aide`) and `/rappels-calendrier` work.
+    // OPS rooms: only `/help` (or `/aide`) and the `/rappels-*` pair work.
     // `/help` shows the OPS-request help; `/rappels-calendrier` starts the
     // reminder inscription (its whole point is to be typed in « Demande d'OPS »,
-    // docs/rappels-calendrier.md §5.1). Every other message is ignored silently.
+    // docs/rappels-calendrier.md §5.1) and `/rappels-stop` ends it — someone who
+    // subscribed from here must be able to unsubscribe from here.
+    // Every other message is ignored silently.
     if (config.matrix.opsRooms.includes(roomId)) {
       const isHelp =
         isSlashCommand &&
@@ -967,18 +984,14 @@ export class MatrixConnector {
           text === "/aide" ||
           text.startsWith("/help ") ||
           text.startsWith("/aide "));
-      const isRappels =
-        isSlashCommand &&
-        (text === "/rappels-calendrier" ||
-          text === "/rappels" ||
-          text.startsWith("/rappels-calendrier ") ||
-          text.startsWith("/rappels "));
       if (isHelp) {
         await this.sendReaction(roomId, userEventId, "📖");
         await this.sendMessage(roomId, buildOpsHelp(), userEventId, threadRoot);
         record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "ops-help" });
-      } else if (isRappels) {
+      } else if (isSlashCommand && isRappelsStart(text)) {
         await this.startRappelsInscription(roomId, sender, userEventId, threadRoot);
+      } else if (isSlashCommand && isRappelsStop(text)) {
+        await this.handleRappelsStop(roomId, sender, text, userEventId, threadRoot);
       }
       return;
     }
@@ -1260,41 +1273,13 @@ export class MatrixConnector {
         return;
       }
 
-      if (
-        text === "/rappels-calendrier" ||
-        text === "/rappels" ||
-        text.startsWith("/rappels-calendrier ") ||
-        text.startsWith("/rappels ")
-      ) {
+      if (isRappelsStart(text)) {
         await this.startRappelsInscription(roomId, sender, userEventId, threadRoot);
         return;
       }
 
-      if (text === "/rappels-stop" || text.startsWith("/rappels-stop ")) {
-        this.pendingRappels.clear(sender);
-        let wasSubscribed = false;
-        try {
-          wasSubscribed = await setStatut(sender, "désactivé");
-        } catch (err) {
-          console.error("[Matrix] /rappels-stop: Grist update failed:", err);
-          await this.sendReaction(roomId, userEventId, "⚠️");
-          await this.sendMessage(
-            roomId,
-            "⚠️ Erreur pendant la désinscription, réessaie plus tard.",
-            userEventId,
-            threadRoot,
-          );
-          record({ user: sender, room: roomId, kind: "slash", text, status: "error", detail: "rappels-stop grist-failed" });
-          return;
-        }
-        await this.sendReaction(roomId, userEventId, "🔕");
-        await this.sendMessage(
-          roomId,
-          wasSubscribed ? buildStopMessage() : buildStopNotFoundMessage(),
-          userEventId,
-          threadRoot,
-        );
-        record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: wasSubscribed ? "rappels-stop" : "rappels-stop not-found" });
+      if (isRappelsStop(text)) {
+        await this.handleRappelsStop(roomId, sender, text, userEventId, threadRoot);
         return;
       }
 
@@ -1395,6 +1380,42 @@ export class MatrixConnector {
 
   private async isDMRoom(roomId: string): Promise<boolean> {
     return this.dmRooms.has(roomId);
+  }
+
+  // Stop the reminders (docs/rappels-calendrier.md §5.1): drop any in-flight
+  // inscription and flip the Grist row to `désactivé`. Reachable from the OPS
+  // rooms as well as the command rooms, so it lives in its own method.
+  private async handleRappelsStop(
+    roomId: string,
+    sender: string,
+    text: string,
+    userEventId: string,
+    threadRoot: string,
+  ): Promise<void> {
+    this.pendingRappels.clear(sender);
+    let wasSubscribed = false;
+    try {
+      wasSubscribed = await setStatut(sender, "désactivé");
+    } catch (err) {
+      console.error("[Matrix] /rappels-stop: Grist update failed:", err);
+      await this.sendReaction(roomId, userEventId, "⚠️");
+      await this.sendMessage(
+        roomId,
+        "⚠️ Erreur pendant la désinscription, réessaie plus tard.",
+        userEventId,
+        threadRoot,
+      );
+      record({ user: sender, room: roomId, kind: "slash", text, status: "error", detail: "rappels-stop grist-failed" });
+      return;
+    }
+    await this.sendReaction(roomId, userEventId, "🔕");
+    await this.sendMessage(
+      roomId,
+      wasSubscribed ? buildStopMessage() : buildStopNotFoundMessage(),
+      userEventId,
+      threadRoot,
+    );
+    record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: wasSubscribed ? "rappels-stop" : "rappels-stop not-found" });
   }
 
   // Start the reminder inscription (docs/rappels-calendrier.md §5.1): open a DM

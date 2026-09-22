@@ -2,6 +2,7 @@ import type { MatrixClient } from "matrix-bot-sdk";
 import { config } from "../config.js";
 import { addCreatedRoom, removeCreatedRoom } from "./created-rooms.js";
 import type { InviteTarget } from "./invite.js";
+import { unknownFlags, unknownFlagsMessage } from "./flags.js";
 
 // Manage rooms inside a single configured Space (MATRIX_MANAGED_SPACE):
 // create a room attached to the space, or "close" one (detach + kick + leave).
@@ -9,6 +10,12 @@ import type { InviteTarget } from "./invite.js";
 
 // A requester must have at least this power level in a room to close it.
 const MODERATOR_POWER_LEVEL = 50;
+
+// Options the two `create` sub-commands understand. Anything else is refused:
+// whatever is not a known flag is read as part of the name, so a mistyped
+// `--startip` would both skip the invitations and end up in the room title.
+const FLAGS_SALON_CREATE = ["clair", "startup", "role"] as const;
+const FLAGS_ESPACE_CREATE = ["clair"] as const;
 
 export interface RoomCmdResult {
   reaction: string;
@@ -953,6 +960,16 @@ export async function handleSpacesCommand(
             reaction: "❌",
             message: '❌ Usage : `/espace create <nom> ["espace-parent"] [--clair]`',
           };
+        const inconnusEspace = unknownFlags(rawArg, new Set(FLAGS_ESPACE_CREATE));
+        if (inconnusEspace.length > 0)
+          return {
+            reaction: "❌",
+            message: unknownFlagsMessage(
+              inconnusEspace,
+              FLAGS_ESPACE_CREATE,
+              "/espace help",
+            ),
+          };
         // `--clair` (anywhere) makes the space public instead of private. Strip
         // it out before parsing name/parent so it never lands in either. Mirrors
         // /salon create.
@@ -1093,6 +1110,16 @@ export async function handleRoomsCommand(
             reaction: "❌",
             message:
               "❌ Usage : `/salon create <nom> [\"espace\"] [--clair] [--startup <startup>] [--role <role>]`",
+          };
+        const inconnusSalon = unknownFlags(rawArg, new Set(FLAGS_SALON_CREATE));
+        if (inconnusSalon.length > 0)
+          return {
+            reaction: "❌",
+            message: unknownFlagsMessage(
+              inconnusSalon,
+              FLAGS_SALON_CREATE,
+              "/salon help",
+            ),
           };
         // Extract `--startup <nom>` and `--role <role>` (both optional): after
         // creation, the connector invites that startup via n8n. Pulled out
