@@ -21,6 +21,8 @@ It handles slash commands only (room management, mailing lists, history) — it 
 
 `/historique` is admin-only and not advertised in `/help`. Type `/help` in a command room for the full, always-up-to-date reference.
 
+When the bot creates a room or a space, the requester is made **moderator (50)** and the bot stays **admin (100)**. Every threshold in the new room is lowered to 50, so a moderator can rename it, set the topic/avatar/history/join rules, invite, kick, ban, redact, add or remove rooms from a space, and appoint other moderators. Matrix auth rules stop them there: a level-50 user cannot grant a level above their own, so only the bot can create another admin or be removed. If the homeserver refuses that adjustment, the bot says so in its reply instead of leaving a room nobody can manage.
+
 In the OPS rooms (`MATRIX_OPS_ROOMS`), `/help` shows how to file an OPS request instead of the bot help, and only the `/rappels-*` pair works besides it — every other message is ignored silently.
 
 ---
