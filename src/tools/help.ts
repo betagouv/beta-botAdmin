@@ -73,6 +73,7 @@ Une commande **de base** par ligne (la plus courante). Toutes les variantes et o
 | \`${handle} /salon create <nom>\` | Crée un salon dans l'espace géré | \`${handle} /salon help\` |
 | \`${handle} /espace create <nom>\` | Crée un sous-espace | \`${handle} /espace help\` |
 | \`${handle} /invite <startup>\` | Invite une startup dans le salon où tu tapes | \`${handle} /invite help\` |
+| \`${handle} /alerte\` | Alerte sécurité sur un composant vulnérable : je te pose les questions en MP, puis j'ouvre le salon dédié | \`${handle} /alerte help\` |
 | \`${handle} /rappels-calendrier\` | Active les rappels avant tes réunions (réglage en MP) | — |
 | \`${handle} /rappels-stop\` | Coupe tes rappels de réunion | — |
 

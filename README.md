@@ -17,13 +17,16 @@ It handles slash commands only (room management, mailing lists, history) — it 
 | `/invite <startup>` | Invite a startup's members into a room or space, via n8n | Everyone (needs invite rights in the **target**) | Anywhere — the target's permissions are the boundary |
 | `/rappels-calendrier` (or `/rappels`) | Subscribe to meeting reminders; the setup happens in DM | Everyone | Command rooms + OPS rooms |
 | `/rappels-stop` | Unsubscribe from meeting reminders | Everyone | Command rooms + OPS rooms |
+| `/alerte [composant]` | Raise a security alert on a vulnerable component: the bot asks the procedure's questions in a DM, then opens a dedicated encrypted room, invites the référents, and announces it with @room in ~Domaine-secu | Everyone | Anywhere — DMs, OPS rooms, and rooms outside `MATRIX_ALLOWED_ROOMS` |
 | `/historique [filter]` | Last 20 interactions, sent in DM | **Admin only** | Command rooms |
 
 `/historique` is admin-only and not advertised in `/help`. For the full, always-up-to-date reference, mention the bot followed by `/help` in a command room (`/help` alone in a DM). A hand-typed mention must be the bot's whole handle — e.g. `@betabot+admin`, derived from its display name — since a mere prefix such as `@betabot` is ignored; the help prints the exact handle, so its examples can be copied as they are.
 
 When the bot creates a room or a space, the requester is made **moderator (50)** and the bot stays **admin (100)**. Every threshold in the new room is lowered to 50, so a moderator can rename it, set the topic/avatar/history/join rules, invite, kick, ban, redact, add or remove rooms from a space, and appoint other moderators. Matrix auth rules stop them there: a level-50 user cannot grant a level above their own, so only the bot can create another admin or be removed. If the homeserver refuses that adjustment, the bot says so in its reply instead of leaving a room nobody can manage.
 
-In the OPS rooms (`MATRIX_OPS_ROOMS`), `/help` shows how to file an OPS request instead of the bot help, and only the `/rappels-*` pair works besides it — every other message is ignored silently.
+In the OPS rooms (`MATRIX_OPS_ROOMS`), `/help` shows how to file an OPS request instead of the bot help, and only the `/rappels-*` pair and `/alerte` work besides it — every other message is ignored silently.
+
+`/alerte` runs the mechanical part of the SSI procedure « Composant vulnérable ». In a DM — typed in a room, the command opens one — the bot asks the questions the procedure requires (component, description, CVSS, CVE, exploited, patch, versions, advisory link, remediation), then shows the exact message that will open the alert room and waits for a `oui`. Only then does it open `tmp-alerte-securite-<composant>-JJMMAA` — private, encrypted, invite-only, history shared with newcomers, every member allowed to invite — invite whoever raised the alert (moderator) and the référents, one at a time so that a wrong ID or a rate limit never sinks the alert, post that message, and announce the room with @room in `ALERTE_SECU_ROOM`. The same component raised twice the same day joins the open room instead of notifying everyone again. `/alerte annuler` drops an alert being prepared. The email to `alertes-securite@beta.gouv.fr` stays manual; the last DM reminds it.
 
 ---
 
@@ -86,6 +89,8 @@ cp .env.example .env
 | `N8N_MEMBRES_WEBHOOK_URL` | — | n8n webhook behind `/invite`. Empty = the command answers that it is unavailable. |
 | `N8N_WEBHOOK_SECRET` | — | Shared secret sent as `X-Betabot-Secret`, so n8n can reject other callers. |
 | `N8N_TIMEOUT_MS` | — | How long to wait for n8n, in ms (default 15000). |
+| `ALERTE_SECU_REFERENTS` | — | Comma-separated Matrix IDs of the référents (techs and SSI) invited into every `/alerte` room. Empty = the room holds only whoever raised the alert, and the reply says so. |
+| `ALERTE_SECU_ROOM` | — | Room where `/alerte` announces the alert with @room (~Domaine-secu). The bot must be a member at a level allowed to notify @room (usually 50), otherwise the announcement pings nobody and the reply says so. Empty = no announcement. |
 
 \* Either `MATRIX_ACCESS_TOKEN` **or** `MATRIX_PASSWORD` must be set.
 

@@ -60,7 +60,7 @@ function serverName(id: string): string {
 // tells the client which server to reach the room through, needed for id-based
 // links. `label` is the visible text (falls back to the id). Bold it upstream
 // if wanted: roomLink(id, `**${name}**`).
-function roomLink(roomId: string, label?: string): string {
+export function roomLink(roomId: string, label?: string): string {
   const via = serverName(roomId);
   const url = `https://matrix.to/#/${encodeURIComponent(roomId)}${
     via ? `?via=${encodeURIComponent(via)}` : ""
@@ -313,8 +313,8 @@ export async function canPromote(
 }
 
 // The display name of a room, or "" when it has none / isn't readable.
-async function roomName(
-  client: MatrixClient,
+export async function roomName(
+  client: Pick<MatrixClient, "getRoomStateEvent">,
   roomId: string,
 ): Promise<string> {
   try {
@@ -543,8 +543,8 @@ export function moderatorPowerLevels(
 // event because Synapse rejects a full power-level override at create time.
 // Returns false when the homeserver refused: the caller says so in its reply
 // rather than leaving someone with a room they silently cannot manage.
-async function grantModeratorRights(
-  client: MatrixClient,
+export async function grantModeratorRights(
+  client: Pick<MatrixClient, "getRoomStateEvent" | "sendStateEvent">,
   roomId: string,
 ): Promise<boolean> {
   try {

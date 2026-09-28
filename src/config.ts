@@ -128,6 +128,15 @@ export const config = {
       "https://messagerie.numerique.gouv.fr/appsuite/",
     ),
   },
+  alerte: {
+    // /alerte: people invited into every alert room — the référents
+    // techs and SSI of the procedure (comma-separated mxids). Empty = the room
+    // holds only whoever raised the alert, and the reply says so.
+    referents: optionalList("ALERTE_SECU_REFERENTS"),
+    // Room where the alert is announced with @room (~Domaine-secu). The bot
+    // must be a member there, at a level allowed to notify @room (usually 50).
+    room: process.env["ALERTE_SECU_ROOM"],
+  },
   n8n: {
     // Webhook that handles the member-list command (/invite). The bot forwards
     // the parsed command to it; n8n reads the espace-membre database, performs
