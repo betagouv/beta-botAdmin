@@ -427,6 +427,13 @@ export class MatrixConnector {
     console.log(
       `[rappels] scheduler actif: tick ${cfg.intervalMin} min, lead ${cfg.leadMin} min, fenêtre ${cfg.windowMin} min, dryRun=${cfg.dryRun}`,
     );
+    // Dry run is the default, so a deployment that forgot the variable looks
+    // healthy while every subscriber waits for reminders that never come.
+    if (cfg.dryRun) {
+      console.warn(
+        "[rappels] ⚠️ DRY RUN : aucun rappel n'est envoyé, ils sont seulement journalisés. Mettre RAPPELS_DRY_RUN=false pour les envoyer.",
+      );
+    }
     const tick = async (): Promise<void> => {
       try {
         const res = await runReminderTick({
@@ -439,7 +446,7 @@ export class MatrixConnector {
           notifyAdmin: (text) => this.notifyAdmin(text),
         });
         console.log(
-          `[rappels] tick: ${res.inscriptions} inscription(s), ${res.events} event(s), ${res.sent} envoyé(s), ${res.broken} cassé(s)`,
+          `[rappels] tick: ${res.inscriptions} inscription(s), ${res.events} event(s), ${res.sent} envoyé(s), ${res.broken} cassé(s), ${res.purged} purgé(s)`,
         );
       } catch (err) {
         console.error("[rappels] tick error:", err);
