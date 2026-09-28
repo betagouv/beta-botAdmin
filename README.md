@@ -19,7 +19,7 @@ It handles slash commands only (room management, mailing lists, history) — it 
 | `/rappels-stop` | Unsubscribe from meeting reminders | Everyone | Command rooms + OPS rooms |
 | `/historique [filter]` | Last 20 interactions, sent in DM | **Admin only** | Command rooms |
 
-`/historique` is admin-only and not advertised in `/help`. Type `/help` in a command room for the full, always-up-to-date reference.
+`/historique` is admin-only and not advertised in `/help`. For the full, always-up-to-date reference, mention the bot followed by `/help` in a command room (`/help` alone in a DM). A hand-typed mention must be the bot's whole handle — e.g. `@betabot+admin`, derived from its display name — since a mere prefix such as `@betabot` is ignored; the help prints the exact handle, so its examples can be copied as they are.
 
 When the bot creates a room or a space, the requester is made **moderator (50)** and the bot stays **admin (100)**. Every threshold in the new room is lowered to 50, so a moderator can rename it, set the topic/avatar/history/join rules, invite, kick, ban, redact, add or remove rooms from a space, and appoint other moderators. Matrix auth rules stop them there: a level-50 user cannot grant a level above their own, so only the bot can create another admin or be removed. If the homeserver refuses that adjustment, the bot says so in its reply instead of leaving a room nobody can manage.
 

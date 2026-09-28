@@ -30,6 +30,7 @@ import { forwardMembresCommand, statutPourReaction } from "../connectors/n8n.js"
 import { parseInviteArgs, isInviteHelp, buildInviteHelp, unknownInviteFlags } from "../commands/invite.js";
 import { resolveInviteTarget, canInvite, canPromote } from "../commands/rooms.js";
 import { buildHelp, buildOpsHelp } from "../tools/help.js";
+import { mentionHandle, mentionNames, typedMentions } from "../tools/mention.js";
 
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
@@ -393,6 +394,13 @@ export class MatrixConnector {
   // Public wrapper so the reminder scheduler can post messages.
   async sendRoomMessage(roomId: string, text: string): Promise<void> {
     await this.sendMessage(roomId, text);
+  }
+
+  // What to type before a command to reach the bot by hand, e.g.
+  // "@betabot+admin". Printed in the help and sent to n8n, which suggests
+  // commands in its replies (see tools/mention.ts).
+  private get botHandle(): string {
+    return mentionHandle(this.ownUserId, this.ownDisplayName);
   }
 
   // Send a one-off notice to the first configured admin, via DM.
@@ -864,23 +872,12 @@ export class MatrixConnector {
     // the bot's name by hand (no pill) would trigger commands — the plain `body`
     // of a real pill is identical to hand-typed text, so it can't be trusted.
     const mentionUserIds = content["m.mentions"]?.user_ids ?? [];
-    // Names a typed plain-text "@name" must match EXACTLY (case-insensitive) to
-    // count as a mention: the full localpart and the full display name, plus the
-    // display name truncated at its first whitespace (e.g. "Betabot+admin [Beta]"
-    // → "@betabot+admin"). The `+`, `-`, `.` and `_` are kept so the real handle
-    // is matched as a whole — "@betabot" (a mere prefix) does NOT count, only the
-    // complete "betabot+admin" handle triggers the bot.
-    const firstRun = (s: string): string =>
-      s.toLowerCase().match(/^[\p{L}\p{N}._+-]+/u)?.[0] ?? s.toLowerCase();
-    const mentionNames = [localPart, this.ownDisplayName]
-      .filter((p): p is string => !!p)
-      .flatMap((name) => [name.toLowerCase(), firstRun(name)]);
+    // A typed plain-text "@name" counts only when it matches one of the bot's
+    // names EXACTLY — "@betabot" alone is a mere prefix (see tools/mention.ts).
+    const names = mentionNames(this.ownUserId, this.ownDisplayName);
     const matchesBotToken = (token: string): boolean =>
-      mentionNames.includes(token.toLowerCase());
-    const atTokens = (
-      body.toLowerCase().match(/@[\p{L}\p{N}._+-]+/gu) ?? []
-    ).map((t) => t.slice(1));
-    const hasTextMention = atTokens.some(matchesBotToken);
+      names.includes(token.toLowerCase());
+    const hasTextMention = typedMentions(body).some(matchesBotToken);
     const isMentioned = this.ownUserId
       ? decodedFormattedBody.includes(this.ownUserId) ||
         mentionUserIds.includes(this.ownUserId) ||
@@ -1040,7 +1037,7 @@ export class MatrixConnector {
         text.startsWith("/aide ")
       ) {
         await this.sendReaction(roomId, userEventId, "📖");
-        await this.sendMessage(roomId, buildHelp(), userEventId, threadRoot);
+        await this.sendMessage(roomId, buildHelp(this.botHandle), userEventId, threadRoot);
         record({ user: sender, room: roomId, kind: "slash", text, status: "ok" });
         return;
       }
@@ -1131,6 +1128,7 @@ export class MatrixConnector {
             targetRoomId: result.createdRoomId,
             targetLabel: result.targetLabel ?? "le salon",
             homeserver: config.matrix.homeserver,
+            botHandle: this.botHandle,
           });
           await this.sendMessage(roomId, inv.message, userEventId, threadRoot);
           record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: `salon+startup n8n ${inv.reaction}` });
@@ -1167,7 +1165,7 @@ export class MatrixConnector {
         // `/invite`, `/invite help`, `/invite aide` → help card (no n8n call).
         if (isInviteHelp(text)) {
           await this.sendReaction(roomId, userEventId, "📖");
-          await this.sendMessage(roomId, buildInviteHelp(), userEventId, threadRoot);
+          await this.sendMessage(roomId, buildInviteHelp(this.botHandle), userEventId, threadRoot);
           record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "invite-help" });
           return;
         }
@@ -1265,6 +1263,7 @@ export class MatrixConnector {
           targetRoomId: parsed.simuler ? "" : target.roomId,
           targetLabel: target.label,
           homeserver: config.matrix.homeserver,
+          botHandle: this.botHandle,
         });
         await this.sendReaction(roomId, userEventId, reply.reaction);
         await this.sendMessage(roomId, reply.message, userEventId, threadRoot);

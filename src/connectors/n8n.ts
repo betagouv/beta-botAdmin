@@ -34,6 +34,10 @@ export interface N8nCommandPayload {
   targetLabel?: string;
   // Matrix homeserver base URL, so n8n can call the invite endpoint.
   homeserver?: string;
+  // What to type before a command to reach the bot by hand (e.g.
+  // "@betabot+admin"), for the commands n8n suggests in its replies. A bare
+  // "@betabot" copied from a suggestion would be silently ignored.
+  botHandle?: string;
 }
 
 // What n8n is expected to return. `reaction` is optional (defaults to a neutral
