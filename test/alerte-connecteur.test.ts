@@ -89,7 +89,7 @@ function connecteur() {
   const dernier = (roomId: string) => messages(roomId).at(-1) ?? "";
   const recoit = (roomId: string, body: string, mention = roomId !== MP) =>
     c.handleIncomingMessage(roomId, message(body, mention)) as Promise<void>;
-  return { salons, ids, messages, dernier, recoit };
+  return { c, salons, ids, messages, dernier, recoit };
 }
 
 let n = 0;
@@ -231,6 +231,24 @@ test("partout : en MP, un utilisateur ordinaire passe la garde du salon de comma
   assert.match(b.dernier(MP), /n'est pas autorisée dans ce salon/);
   await b.recoit(MP, "/alerte");
   assert.match(b.dernier(MP), /Question 1\/9/);
+});
+
+// Not an /alerte test as such, but it rides on the same harness: a bot back
+// after downtime replays old history, and must not apologise for each old
+// message it cannot decrypt.
+test("un vieux message indéchiffrable, rejoué au démarrage, ne déclenche pas d'excuse", async () => {
+  const b = connecteur();
+  b.c.startupTs = Date.now() - 60_000;
+  const indechiffrable = (ts: number) => ({
+    sender: USER,
+    event_id: `$chiffre${++n}`,
+    origin_server_ts: ts,
+    content: {},
+  });
+  await b.c.handleFailedDecryption(MP, indechiffrable(Date.now() - 86_400_000), new Error("clé absente"));
+  assert.deepEqual(b.messages(MP), []);
+  await b.c.handleFailedDecryption(MP, indechiffrable(Date.now()), new Error("clé absente"));
+  assert.match(b.dernier(MP), /pas pu déchiffrer/);
 });
 
 test("sans mention, un message en salon reste sans réponse", async () => {

@@ -809,31 +809,45 @@ export class MatrixConnector {
     this.client.on(
       "room.failed_decryption",
       (roomId: string, event: Record<string, unknown>, error: Error) => {
-        console.log(`[Matrix] Decryption failure in ${roomId}:`, error.message);
-        const sender = event.sender as string;
-        if (sender === this.ownUserId) return;
-        const relates = (
-          event.content as Record<string, unknown> | undefined
-        )?.["m.relates_to"] as
-          | { rel_type?: string; event_id?: string }
-          | undefined;
-        const threadRoot =
-          relates?.rel_type === "m.thread"
-            ? (relates.event_id ?? (event.event_id as string))
-            : (event.event_id as string);
-        void this.isDMRoom(roomId).then((isDM) => {
-          const isActiveBotThread = this.activeBotThreads.has(threadRoot ?? "");
-          if (isDM || isActiveBotThread) {
-            void this.sendMessage(
-              roomId,
-              "_(Désolé, je n'ai pas pu déchiffrer votre message 🫣)_",
-              event.event_id as string,
-              isDM ? undefined : (threadRoot ?? undefined),
-            );
-          }
-        });
+        void this.handleFailedDecryption(roomId, event, error);
       },
     );
+  }
+
+  // A message the bot could not decrypt: say so, in a DM or a thread the bot
+  // is part of, so the sender knows it went unread.
+  private async handleFailedDecryption(
+    roomId: string,
+    event: Record<string, unknown>,
+    error: Error,
+  ): Promise<void> {
+    console.log(`[Matrix] Decryption failure in ${roomId}:`, error.message);
+    const sender = event.sender as string;
+    if (sender === this.ownUserId) return;
+    // Same guard as for readable messages: after downtime the first sync
+    // replays weeks of history, and the keys of old messages were never
+    // shared with this device. Apologising for each of them spams every DM.
+    const eventTs = event.origin_server_ts as number | undefined;
+    if (eventTs !== undefined && eventTs < this.startupTs) return;
+    const relates = (
+      event.content as Record<string, unknown> | undefined
+    )?.["m.relates_to"] as
+      | { rel_type?: string; event_id?: string }
+      | undefined;
+    const threadRoot =
+      relates?.rel_type === "m.thread"
+        ? (relates.event_id ?? (event.event_id as string))
+        : (event.event_id as string);
+    const isDM = await this.isDMRoom(roomId);
+    const isActiveBotThread = this.activeBotThreads.has(threadRoot ?? "");
+    if (isDM || isActiveBotThread) {
+      await this.sendMessage(
+        roomId,
+        "_(Désolé, je n'ai pas pu déchiffrer votre message 🫣)_",
+        event.event_id as string,
+        isDM ? undefined : (threadRoot ?? undefined),
+      );
+    }
   }
 
   private async handleIncomingMessage(
