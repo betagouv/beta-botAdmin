@@ -301,6 +301,8 @@ export class MatrixConnector {
   private resolvedToken = "";
   private activeBotThreads = new Set<string>();
   private dmRooms = new Set<string>();
+  // Rooms found to hold more than the bot and one person: never re-checked.
+  private groupRooms = new Set<string>();
   private pendingVerif = new Map<string, VerifState>();
   private pendingRappels = new PendingInscriptions();
   private alertes = new ConversationsAlerte();
@@ -855,7 +857,7 @@ export class MatrixConnector {
     const eventTs = event.origin_server_ts as number | undefined;
     if (eventTs !== undefined && eventTs < this.startupTs) return;
 
-    const isDM = await this.isDMRoom(roomId);
+    const isDM = await this.isDMRoom(roomId, true);
 
     const content = event.content as {
       msgtype?: string;
@@ -947,7 +949,7 @@ export class MatrixConnector {
     const { text: afterMention, matched: mentionAtStart } = stripLeadingMention(trimmedBody);
 
     // Slash command rule:
-    // - In DM: any leading "/" counts.
+    // - In DM: any leading "/" counts, with or without a mention before it.
     // - From the bot's own account (allowSelfCommands) or an exempted account
     //   (noMentionUsers, e.g. an n8n automation): any leading "/" counts, no
     //   mention needed. Permission checks (rooms, domain, admin) still apply.
@@ -955,7 +957,8 @@ export class MatrixConnector {
     //   first char right after the stripped mention text.
     const isNoMentionUser = config.matrix.noMentionUsers.includes(sender);
     const isSlashCommand = isDM || isSelf || isNoMentionUser
-      ? trimmedBody.startsWith("/")
+      ? trimmedBody.startsWith("/") ||
+        (mentionAtStart && afterMention.startsWith("/"))
       : isMentioned && mentionAtStart && afterMention.startsWith("/");
 
     // For slash dispatch, prefer the cleanly-stripped "afterMention" when mention is at start.
@@ -1426,8 +1429,28 @@ export class MatrixConnector {
     }
   }
 
-  private async isDMRoom(roomId: string): Promise<boolean> {
-    return this.dmRooms.has(roomId);
+  // Whether a room is a DM with the bot. The bot's m.direct account data only
+  // knows the DMs it opened or was invited to as such, and it loses some: the
+  // SDK drops a room from it at the first failed lookup, and every instance
+  // of the bot rewrites it. A room holding the bot and one other person is a
+  // DM all the same — without this, a command typed there needs a mention,
+  // and /alerte asks its questions in some other DM. With `verifier`, the
+  // membership of a room seen for the first time is checked: one request per
+  // room, the result kept either way.
+  private async isDMRoom(roomId: string, verifier = false): Promise<boolean> {
+    if (this.dmRooms.has(roomId)) return true;
+    if (!verifier || this.groupRooms.has(roomId)) return false;
+    try {
+      const membres = await this.client.getJoinedRoomMembers(roomId);
+      if (membres.length === 2 && membres.includes(this.ownUserId)) {
+        this.dmRooms.add(roomId);
+        return true;
+      }
+      this.groupRooms.add(roomId);
+    } catch (err) {
+      console.error(`[Matrix] membres de ${roomId} illisibles:`, err);
+    }
+    return false;
   }
 
   // Stop the reminders (docs/rappels-calendrier.md §5.1): drop any in-flight

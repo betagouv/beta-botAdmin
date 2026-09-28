@@ -17,6 +17,8 @@ const COMMANDES = "!commandes:hs";
 const OPS = "!ops:hs";
 const AILLEURS = "!ailleurs:hs";
 const MP = "!mp:hs";
+// A one-to-one room with the bot that its m.direct does not list.
+const TETE_A_TETE = "!tete-a-tete:hs";
 const ANNONCE = "!annonce:hs";
 
 const dataDir = mkdtempSync(path.join(tmpdir(), "betabot-test-"));
@@ -65,6 +67,12 @@ function connecteur() {
       return "$pl";
     },
     dms: { getOrCreateDm: async () => MP },
+    // Every room holds a third person, except the one-to-one rooms.
+    async getJoinedRoomMembers(roomId: string) {
+      return roomId === TETE_A_TETE || roomId === MP
+        ? [BOT, USER]
+        : [BOT, USER, "@autre:hs"];
+    },
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const c = new MatrixConnector() as any;
@@ -176,6 +184,22 @@ test("l'historique du bot ne garde pas la description de la faille", async () =>
   const historique = readFileSync(path.join(dataDir, "command-history.json"), "utf-8");
   assert.match(historique, /alerte/);
   assert.doesNotMatch(historique, /RCE sans authentification|CVE-2026-1234|example\.org/);
+});
+
+test("un tête-à-tête absent de m.direct est un MP : /alerte seul y pose ses questions, sur place", async () => {
+  const b = connecteur();
+  await b.recoit(TETE_A_TETE, "/alerte", false);
+  assert.match(b.dernier(TETE_A_TETE), /Question 1\/9/);
+  assert.deepEqual(b.messages(MP), []);
+  await b.recoit(TETE_A_TETE, "composant-f", false);
+  assert.match(b.dernier(TETE_A_TETE), /Question 2\/9/);
+});
+
+test("en MP, /alerte marche aussi précédé d'une mention", async () => {
+  const b = connecteur();
+  await b.recoit(TETE_A_TETE, "/alerte", true);
+  assert.match(b.dernier(TETE_A_TETE), /Question 1\/9/);
+  assert.deepEqual(b.messages(MP), []);
 });
 
 test("partout : hors MATRIX_ALLOWED_ROOMS, seule l'alerte est entendue, et les questions passent en MP", async () => {
