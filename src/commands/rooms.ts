@@ -237,15 +237,6 @@ async function resolveRoom(
   return { room: matches[0]!, ambiguous: false };
 }
 
-// Whether a user is a joined member of a room/space (exported for /invite).
-export async function isMemberOf(
-  client: MatrixClient,
-  roomId: string,
-  userId: string,
-): Promise<boolean> {
-  return isRoomMember(client, roomId, userId);
-}
-
 export type InvitePermission =
   | { ok: true }
   | { ok: false; reason: "not-member" }
@@ -599,6 +590,25 @@ function rightsLine(kind: "salon" | "espace", ok: boolean): string {
   );
 }
 
+// Who gets invited into a room or space the bot creates: the requester, or —
+// when the bot created it for itself (self command, e.g. via n8n) — the
+// configured default invitees. The bot's own account must never be in the
+// list: inviting yourself (or a user already in the room) is rejected by the
+// server with M_FORBIDDEN.
+function inviteesFor(inviteUserId: string, botUserId: string): string[] {
+  const invitees = (
+    inviteUserId && inviteUserId !== botUserId
+      ? [inviteUserId]
+      : config.matrix.defaultInvites
+  ).filter((u) => u !== botUserId);
+  if (invitees.length === 0) {
+    console.warn(
+      "[rooms] personne à inviter : MATRIX_DEFAULT_INVITES est vide, le bot sera seul dans ce qu'il crée.",
+    );
+  }
+  return invitees;
+}
+
 async function createRoom(
   client: MatrixClient,
   spaceId: string,
@@ -621,15 +631,7 @@ async function createRoom(
     };
   }
 
-  // Who gets invited: the requester, or — when the bot created the room for
-  // itself (self command, e.g. via n8n) — the configured default invitees.
-  // The bot's own account must never be in the list: inviting yourself (or a
-  // user already in the room) is rejected by the server with M_FORBIDDEN.
-  const invitees = (
-    inviteUserId && inviteUserId !== botUserId
-      ? [inviteUserId]
-      : config.matrix.defaultInvites
-  ).filter((u) => u !== botUserId);
+  const invitees = inviteesFor(inviteUserId, botUserId);
 
   // Keep the bot as admin (100) and make every invitee a moderator (50) so
   // they can manage/close the room. `users` is replaced wholesale by the
@@ -676,7 +678,7 @@ async function createRoom(
     via: [serverName(roomId)],
   });
 
-  // Track it so `/salon` commands can manage it later.
+  // Record it in data/created-rooms.json (see created-rooms.ts).
   addCreatedRoom(roomId, name);
 
   return {
@@ -715,11 +717,7 @@ async function createSpace(
     };
   }
 
-  const invitees = (
-    inviteUserId && inviteUserId !== botUserId
-      ? [inviteUserId]
-      : config.matrix.defaultInvites
-  ).filter((u) => u !== botUserId);
+  const invitees = inviteesFor(inviteUserId, botUserId);
 
   // Bot stays admin (100), invitees become moderators (50).
   const users: Record<string, number> = { [botUserId]: 100 };

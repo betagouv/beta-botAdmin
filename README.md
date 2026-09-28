@@ -32,6 +32,8 @@ In the OPS rooms (`MATRIX_OPS_ROOMS`), `/help` shows how to file an OPS request 
 - Node.js 20.6+
 - A Matrix/Tchap account for the bot (with a **dedicated device** token — see below)
 - *(optional)* A DiMail account, if you use the `/emails` command
+- *(optional)* A Grist document and a CalDAV service account, if you use the meeting reminders (`/rappels-calendrier`)
+- *(optional)* An n8n webhook, if you use `/invite`
 
 ---
 
@@ -59,18 +61,31 @@ cp .env.example .env
 | `MATRIX_USER` | ✅ | Bot's full Matrix ID, e.g. `@betabot:agent.dinum.tchap.gouv.fr`. |
 | `MATRIX_ACCESS_TOKEN` | ✅* | Access token for the bot's **dedicated device** (see [Getting the access token](#getting-the-access-token-important)). |
 | `MATRIX_PASSWORD` | ✅* | Alternative to the token: the bot logs in at startup. *Provide either the token or the password.* |
-| `MATRIX_DEVICE_ID` | — | Optional, only read before the very first start; ignored once a session exists. |
 | `MATRIX_ALLOWED_ROOMS` | — | Comma-separated room IDs to restrict the bot to. Empty = responds everywhere it's invited. |
 | `MATRIX_COMMAND_ROOMS` | — | Rooms where slash commands are accepted. Empty = allowed wherever the bot responds. |
 | `MATRIX_COMMAND_ROOMS_LABEL` | — | Human-readable name shown instead of the raw room ID when a command is refused (e.g. `Salon Admin betabot`). |
+| `MATRIX_COMMAND_ROOMS_URL` | — | `matrix.to` link to the command room; makes the label above clickable. |
+| `MATRIX_DM_TEST_USERS` | — | Users allowed to run commands in a DM with the bot, bypassing `MATRIX_COMMAND_ROOMS` (testing). `/espace delete` is reserved to them, in DM. |
 | `MATRIX_CONTACT` | — | Contact shown in the generic reply when someone DMs or @mentions the bot outside a command. Empty = the contact line is omitted. |
 | `MATRIX_ADMIN_USERS` | — | Comma-separated Matrix IDs allowed to run admin commands (`/historique`). Empty = nobody. |
 | `MATRIX_MANAGED_SPACE` | — | Space the bot may create/close rooms in via `/salon` and `/espace`. The bot needs power ≥ the space's `m.space.child` level (usually 100). Empty = `/salon` and `/espace` disabled. |
 | `MATRIX_OPS_ROOMS` | — | Rooms where `/help` returns the OPS-request help and only `/rappels-calendrier` / `/rappels-stop` also work. |
+| `MATRIX_NO_MENTION_USERS` | — | Accounts whose commands are accepted in rooms without mentioning the bot (e.g. an n8n automation). Defaults to `@betabotadmin-beta.gouv.fr:agent.dinum.tchap.gouv.fr`, the beta.gouv.fr bot's own account. |
+| `MATRIX_ALLOW_SELF_COMMANDS` | — | `true` lets the bot's own account run slash commands. |
+| `MATRIX_DEFAULT_INVITES` | — | Comma-separated Matrix IDs invited as moderators when the bot creates a room or space for itself (a command posted with its own account). Empty = the bot is alone in it, and a warning is logged. |
 | `DIMAIL_URL` | — | DiMail API base URL (mailing lists / aliases). |
-| `DIMAIL_USER` / `DIMAIL_PASSWORD` | — | DiMail credentials; used to fetch a token when `DIMAIL_TOKEN` is empty. |
+| `DIMAIL_USER` / `DIMAIL_PASSWORD` | — | DiMail credentials; the bot logs in with them at every `/emails` command. |
 | `DIMAIL_DOMAIN` | — | Default mail domain used to resolve a bare list name (e.g. `cartobio` → `cartobio@<domain>`). |
-| `DIMAIL_TOKEN` | — | Pre-existing DiMail Bearer token; if set, `DIMAIL_USER`/`PASSWORD` are not needed. |
+| `GRIST_API_URL` / `GRIST_API_KEY` | — | Grist instance and API key storing the reminder subscriptions. |
+| `GRIST_OPS_DOC_ID` | — | Grist document holding the `RappelsCalendrier` and `RappelsEnvoyes` tables (`GRIST_OPS_TABLE_INSCRIPTIONS` / `GRIST_OPS_TABLE_SENT` override their names). |
+| `CALDAV_USER` / `CALDAV_PASSWORD` | — | Service account reading the subscribers' calendars — each subscriber shares their calendar with it, read-only. |
+| `CALDAV_HELP_URL` | — | Page linked in the subscription DM, to find one's CalDAV URL. |
+| `RAPPELS_ENABLED` | — | `false` turns the reminder scheduler off. |
+| `RAPPELS_DRY_RUN` | — | ⚠️ **Dry run by default**: reminders are logged, not sent. Set `false` in production. |
+| `RAPPELS_INTERVAL_MIN` / `RAPPELS_LEAD_MIN` / `RAPPELS_WINDOW_MIN` | — | Scheduler period, how long before an event to remind, and width of the detection window, in minutes (defaults 5 / 15 / 5). |
+| `N8N_MEMBRES_WEBHOOK_URL` | — | n8n webhook behind `/invite`. Empty = the command answers that it is unavailable. |
+| `N8N_WEBHOOK_SECRET` | — | Shared secret sent as `X-Betabot-Secret`, so n8n can reject other callers. |
+| `N8N_TIMEOUT_MS` | — | How long to wait for n8n, in ms (default 15000). |
 
 \* Either `MATRIX_ACCESS_TOKEN` **or** `MATRIX_PASSWORD` must be set.
 

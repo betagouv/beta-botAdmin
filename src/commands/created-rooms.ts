@@ -2,7 +2,9 @@ import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
 
-// Persistent list of rooms created by the bot via `/salon create`.
+// Persistent list of rooms created by the bot via `/salon create`, kept in
+// data/created-rooms.json. Nothing in the bot reads it back: it is a record of
+// the rooms the bot opened, for whoever runs it.
 export interface CreatedRoom {
   roomId: string;
   name: string;
@@ -34,10 +36,6 @@ function save(): void {
   } catch (err) {
     console.error("[created-rooms] save failed:", err);
   }
-}
-
-export function listCreatedRooms(): CreatedRoom[] {
-  return [...load()];
 }
 
 export function addCreatedRoom(roomId: string, name: string): void {
