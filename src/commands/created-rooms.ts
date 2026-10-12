@@ -7,6 +7,9 @@ export interface CreatedRoom {
   roomId: string;
   name: string;
   createdTs: number;
+  // When the inactivity warning was posted (tools/inactivite.ts). Absent while
+  // the room is active.
+  avertiLe?: number;
 }
 
 function filePath(): string {
@@ -50,5 +53,14 @@ export function addCreatedRoom(roomId: string, name: string): void {
 
 export function removeCreatedRoom(roomId: string): void {
   cache = load().filter((r) => r.roomId !== roomId);
+  save();
+}
+
+// Record (or clear, with undefined) when the inactivity warning was posted.
+export function setAvertiLe(roomId: string, ts: number | undefined): void {
+  const room = load().find((r) => r.roomId === roomId);
+  if (!room) return;
+  if (ts === undefined) delete room.avertiLe;
+  else room.avertiLe = ts;
   save();
 }

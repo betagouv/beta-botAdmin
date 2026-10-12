@@ -9,7 +9,12 @@ import {
 import { marked } from "marked";
 import { config } from "../config.js";
 import { handleEmailsCommand } from "../commands/emails.js";
-import { handleRoomsCommand, handleSpacesCommand } from "../commands/rooms.js";
+import {
+  detachAndClose,
+  handleRoomsCommand,
+  handleSpacesCommand,
+} from "../commands/rooms.js";
+import { listCreatedRooms, setAvertiLe } from "../commands/created-rooms.js";
 import { record, query, formatHistory } from "../commands/history.js";
 import { buildCommandOnlyNotice } from "../commands/notice.js";
 import {
@@ -26,6 +31,11 @@ import {
 import { testAccess } from "../connectors/caldav.js";
 import { upsertInscription, setStatut } from "../tools/rappels-store.js";
 import { runReminderTick } from "../tools/rappels-scheduler.js";
+import {
+  runInactivityTick,
+  lastHumanMessageTs,
+  parentSpace,
+} from "../tools/inactivite.js";
 import { forwardMembresCommand, statutPourReaction } from "../connectors/n8n.js";
 import { parseInviteArgs, isInviteHelp, buildInviteHelp, unknownInviteFlags } from "../commands/invite.js";
 import { resolveInviteTarget, canInvite, canPromote } from "../commands/rooms.js";
@@ -287,6 +297,7 @@ export class MatrixConnector {
   private pendingVerif = new Map<string, VerifState>();
   private pendingRappels = new PendingInscriptions();
   private reminderTimer?: ReturnType<typeof setInterval>;
+  private inactivityTimer?: ReturnType<typeof setInterval>;
   private startupTs = Date.now();
 
   constructor() {}
@@ -382,9 +393,11 @@ export class MatrixConnector {
     await this.loadDirectRooms();
 
     this.startReminderScheduler();
+    this.startInactivityScheduler();
 
     process.on("SIGINT", () => {
       if (this.reminderTimer) clearInterval(this.reminderTimer);
+      if (this.inactivityTimer) clearInterval(this.inactivityTimer);
       this.client.stop();
       process.exit(0);
     });
@@ -440,6 +453,51 @@ export class MatrixConnector {
     // First tick after a short delay (let sync settle), then on the interval.
     setTimeout(() => void tick(), 15_000);
     this.reminderTimer = setInterval(() => void tick(), cfg.intervalMin * 60_000);
+  }
+
+  // Inactive-room sweep (tools/inactivite.ts) over the rooms the bot created.
+  // Idleness is counted in days, so a tick every 6 hours is plenty.
+  private startInactivityScheduler(): void {
+    const cfg = config.inactivite;
+    if (!cfg.enabled) {
+      console.log("[inactivite] désactivé (INACTIVITE_ENABLED=false)");
+      return;
+    }
+    console.log(
+      `[inactivite] actif: avertissement après ${cfg.jours} j sans message, fermeture ${cfg.delaiJours} j plus tard, dryRun=${cfg.dryRun}`,
+    );
+    const tick = async (): Promise<void> => {
+      try {
+        const res = await runInactivityTick({
+          now: Date.now(),
+          inactiveDays: cfg.jours,
+          graceDays: cfg.delaiJours,
+          dryRun: cfg.dryRun,
+          rooms: listCreatedRooms(),
+          lastHumanMessage: (roomId) =>
+            lastHumanMessageTs(this.client, roomId, this.ownUserId),
+          send: (roomId, text) => this.sendRoomMessage(roomId, text),
+          close: async (roomId) =>
+            detachAndClose(
+              this.client,
+              (await parentSpace(this.client, roomId)) ??
+                config.matrix.managedSpace,
+              roomId,
+              this.ownUserId,
+              "Salon fermé pour inactivité",
+            ),
+          setWarned: setAvertiLe,
+          notifyAdmin: (text) => this.notifyAdmin(text),
+        });
+        console.log(
+          `[inactivite] tick${cfg.dryRun ? " (dry run)" : ""}: ${res.salons} salon(s), ${res.avertis} averti(s), ${res.fermes} fermé(s), ${res.repris} repris, ${res.erreurs} erreur(s)`,
+        );
+      } catch (err) {
+        console.error("[inactivite] tick error:", err);
+      }
+    };
+    setTimeout(() => void tick(), 60_000);
+    this.inactivityTimer = setInterval(() => void tick(), 6 * 3_600_000);
   }
 
   // Intercept verification to-device events before the Rust engine processes them

@@ -23,6 +23,8 @@ It handles slash commands only (room management, mailing lists, history) — it 
 
 When the bot creates a room or a space, the requester is made **moderator (50)** and the bot stays **admin (100)**. Every threshold in the new room is lowered to 50, so a moderator can rename it, set the topic/avatar/history/join rules, invite, kick, ban, redact, add or remove rooms from a space, and appoint other moderators. Matrix auth rules stop them there: a level-50 user cannot grant a level above their own, so only the bot can create another admin or be removed. If the homeserver refuses that adjustment, the bot says so in its reply instead of leaving a room nobody can manage.
 
+The rooms the bot created with `/salon create` are checked every 6 hours. After 60 days (`INACTIVITE_JOURS`) without a message from anyone but the bot, the bot posts a warning with a deadline. If nobody writes within 14 days (`INACTIVITE_DELAI_JOURS`), it closes the room the way `/salon delete` does — detached from its space, members removed, bot leaves — and tells the first admin in DM. Any message resets the clock, even an encrypted one the bot cannot read. Dry run by default: the bot only logs what it would do until `INACTIVITE_DRY_RUN=false`.
+
 In the OPS rooms (`MATRIX_OPS_ROOMS`), `/help` shows how to file an OPS request instead of the bot help, and only the `/rappels-*` pair works besides it — every other message is ignored silently.
 
 ---
@@ -71,6 +73,10 @@ cp .env.example .env
 | `DIMAIL_USER` / `DIMAIL_PASSWORD` | — | DiMail credentials; used to fetch a token when `DIMAIL_TOKEN` is empty. |
 | `DIMAIL_DOMAIN` | — | Default mail domain used to resolve a bare list name (e.g. `cartobio` → `cartobio@<domain>`). |
 | `DIMAIL_TOKEN` | — | Pre-existing DiMail Bearer token; if set, `DIMAIL_USER`/`PASSWORD` are not needed. |
+| `INACTIVITE_ENABLED` | — | `false` turns off the inactive-room check. On by default. |
+| `INACTIVITE_DRY_RUN` | — | By default the check only logs what it would do. `false` = it really warns and closes. |
+| `INACTIVITE_JOURS` | — | Days without a message before the warning (default `60`). |
+| `INACTIVITE_DELAI_JOURS` | — | Days between the warning and the closing (default `14`). |
 
 \* Either `MATRIX_ACCESS_TOKEN` **or** `MATRIX_PASSWORD` must be set.
 
