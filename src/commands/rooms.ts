@@ -71,12 +71,14 @@ export function roomLink(roomId: string, label?: string): string {
 
 // Close a room: detach it from the space, kick every member except the bot,
 // then the bot leaves last. Returns how many members were kicked. Used by the
-// `/salon delete` command.
+// `/salon delete` command and the inactive-room sweep (tools/inactivite.ts).
 export async function detachAndClose(
   client: MatrixClient,
   spaceId: string | undefined,
   roomId: string,
   botUserId: string,
+  // What the kicked members read as the reason they were removed.
+  reason = "Salon fermé",
 ): Promise<number> {
   if (spaceId) {
     try {
@@ -96,7 +98,7 @@ export async function detachAndClose(
     for (const m of members) {
       if (m === botUserId) continue;
       try {
-        await client.kickUser(m, roomId, "Salon fermé");
+        await client.kickUser(m, roomId, reason);
         kicked++;
       } catch {
         // member already gone / insufficient power on a specific user

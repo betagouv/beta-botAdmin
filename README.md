@@ -24,6 +24,8 @@ It handles slash commands only (room management, mailing lists, history) — it 
 
 When the bot creates a room or a space, the requester is made **moderator (50)** and the bot stays **admin (100)**. Every threshold in the new room is lowered to 50, so a moderator can rename it, set the topic/avatar/history/join rules, invite, kick, ban, redact, add or remove rooms from a space, and appoint other moderators. Matrix auth rules stop them there: a level-50 user cannot grant a level above their own, so only the bot can create another admin or be removed. If the homeserver refuses that adjustment, the bot says so in its reply instead of leaving a room nobody can manage.
 
+The rooms the bot created with `/salon create` are checked every 6 hours. After 60 days (`INACTIVITE_JOURS`) without a message from anyone but the bot, the bot posts a warning with a deadline. If nobody writes within 14 days (`INACTIVITE_DELAI_JOURS`), it closes the room the way `/salon delete` does — detached from its space, members removed, bot leaves — and tells the first admin in DM. Any message resets the clock, even an encrypted one the bot cannot read. The `/alerte` rooms are left out: the people handling the alert close them. Dry run by default: the bot only logs what it would do until `INACTIVITE_DRY_RUN=false`.
+
 In the OPS rooms (`MATRIX_OPS_ROOMS`), `/help` shows how to file an OPS request instead of the bot help, and only the `/rappels-*` pair and `/alerte` work besides it — every other message is ignored silently.
 
 `/alerte` runs the mechanical part of the SSI procedure « Composant vulnérable ». In a DM — typed in a room, the command opens one — the bot asks the questions the procedure requires (component, description, CVSS, CVE, exploited, patch, versions, advisory link, remediation), then shows the exact message that will open the alert room and waits for a `oui`. Only then does it open `tmp-alerte-securite-<composant>-JJMMAA` — private, encrypted, invite-only, history shared with newcomers, every member allowed to invite — invite whoever raised the alert (moderator) and the référents, one at a time so that a wrong ID or a rate limit never sinks the alert, post that message, and announce the room with @room in `ALERTE_SECU_ROOM`. The same component raised twice the same day joins the open room instead of notifying everyone again. `/alerte annuler` drops an alert being prepared. The email to `alertes-securite@beta.gouv.fr` stays manual; the last DM reminds it.
@@ -91,6 +93,10 @@ cp .env.example .env
 | `N8N_TIMEOUT_MS` | — | How long to wait for n8n, in ms (default 15000). |
 | `ALERTE_SECU_REFERENTS` | — | Comma-separated Matrix IDs of the référents (techs and SSI) invited into every `/alerte` room. Empty = the room holds only whoever raised the alert, and the reply says so. |
 | `ALERTE_SECU_ROOM` | — | Room where `/alerte` announces the alert with @room (~Domaine-secu). The bot must be a member at a level allowed to notify @room (usually 50), otherwise the announcement pings nobody and the reply says so. Empty = no announcement. |
+| `INACTIVITE_ENABLED` | — | `false` turns off the inactive-room check. On by default. |
+| `INACTIVITE_DRY_RUN` | — | By default the check only logs what it would do. `false` = it really warns and closes. |
+| `INACTIVITE_JOURS` | — | Days without a message before the warning (default `60`). |
+| `INACTIVITE_DELAI_JOURS` | — | Days between the warning and the closing (default `14`). |
 
 \* Either `MATRIX_ACCESS_TOKEN` **or** `MATRIX_PASSWORD` must be set.
 

@@ -85,9 +85,11 @@ function jourParis(now: Date): { jj: string; mm: string; aaaa: string } {
 }
 
 // The procedure's naming: tmp-alerte-securite-<composant>-JJMMAA.
+export const PREFIXE_SALON_ALERTE = "tmp-alerte-securite-";
+
 export function nomSalonAlerte(composant: string, now: Date): string {
   const { jj, mm, aaaa } = jourParis(now);
-  return `tmp-alerte-securite-${slugComposant(composant)}-${jj}${mm}${aaaa.slice(-2)}`;
+  return `${PREFIXE_SALON_ALERTE}${slugComposant(composant)}-${jj}${mm}${aaaa.slice(-2)}`;
 }
 
 // A matrix.to link to a user, rendered as a pill by Tchap/Element.

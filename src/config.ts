@@ -111,6 +111,16 @@ export const config = {
     // [now + lead - window, now + lead] are reminded this tick.
     windowMin: Number(optional("RAPPELS_WINDOW_MIN", "5")),
   },
+  inactivite: {
+    // Sweep of the rooms the bot created (tools/inactivite.ts): a warning after
+    // `jours` without a human message, then the room is closed if nobody
+    // writes in the next `delaiJours`.
+    enabled: process.env["INACTIVITE_ENABLED"] !== "false",
+    // Safety default: log instead of warning or closing. Flip to "false" to act.
+    dryRun: process.env["INACTIVITE_DRY_RUN"] !== "false",
+    jours: Number(optional("INACTIVITE_JOURS", "60")),
+    delaiJours: Number(optional("INACTIVITE_DELAI_JOURS", "14")),
+  },
   caldav: {
     // Service account used to reach La Suite (Open-Xchange) CalDAV over Basic
     // auth. The per-user calendar URL is provided at inscription time; these
