@@ -84,6 +84,7 @@ cp .env.example .env
 | `GRIST_API_URL` / `GRIST_API_KEY` | — | Grist instance and API key storing the reminder subscriptions. |
 | `GRIST_OPS_DOC_ID` | — | Grist document holding the `RappelsCalendrier` and `RappelsEnvoyes` tables (`GRIST_OPS_TABLE_INSCRIPTIONS` / `GRIST_OPS_TABLE_SENT` override their names). |
 | `CALDAV_USER` / `CALDAV_PASSWORD` | — | Service account reading the subscribers' calendars — each subscriber shares their calendar with it, read-only. |
+| `CALDAV_ALLOWED_HOSTS` | — | Comma-separated hosts the CalDAV credentials may be sent to (default `messagerie.numerique.gouv.fr`). Any calendar URL on another host is refused. |
 | `CALDAV_HELP_URL` | — | Page linked in the subscription DM, to find one's CalDAV URL. |
 | `RAPPELS_ENABLED` | — | `false` turns the reminder scheduler off. |
 | `RAPPELS_DRY_RUN` | — | ⚠️ **Dry run by default**: reminders are logged, not sent. Set `false` in production. |

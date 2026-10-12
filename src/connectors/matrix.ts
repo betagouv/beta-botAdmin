@@ -27,10 +27,31 @@ import {
   buildAccessErrorMessage,
   buildStopMessage,
   buildStopNotFoundMessage,
+  buildRefusedUrlMessage,
+  buildProofChallengeMessage,
+  buildProofPendingMessage,
+  buildProofNotFoundMessage,
+  buildProofFailedMessage,
+  buildProofCancelledMessage,
+  newProofCode,
+  readProofReply,
+  MAX_ESSAIS_PREUVE,
+  type Preuve,
 } from "../commands/rappels.js";
-import { testAccess } from "../connectors/caldav.js";
+import {
+  testAccess,
+  calendarOwnerEmails,
+  ownsCalendar,
+  fetchEvents,
+  hasProofEvent,
+} from "../connectors/caldav.js";
 import { upsertInscription, setStatut } from "../tools/rappels-store.js";
-import { runReminderTick } from "../tools/rappels-scheduler.js";
+import { isKnownInscription, markKnownInscription } from "../tools/rappels-connues.js";
+import {
+  runReminderTick,
+  findForeignInscriptions,
+  buildForeignInscriptionsNotice,
+} from "../tools/rappels-scheduler.js";
 import {
   runInactivityTick,
   lastHumanMessageTs,
@@ -490,7 +511,31 @@ export class MatrixConnector {
     };
     // First tick after a short delay (let sync settle), then on the interval.
     setTimeout(() => void tick(), 15_000);
+    // Once per start: inscriptions stored before the owner check existed.
+    setTimeout(() => void this.auditRappelsOwners(), 30_000);
     this.reminderTimer = setInterval(() => void tick(), cfg.intervalMin * 60_000);
+  }
+
+  // Tell the admin, once per inscription, about active inscriptions whose
+  // calendar belongs to another account (see findForeignInscriptions). Rows
+  // that went through the proof step are already known. In dry run, like the
+  // reminders, it only logs: a local instance on the prod Grist stays quiet.
+  private async auditRappelsOwners(): Promise<void> {
+    try {
+      const { etrangeres, illisibles } = await findForeignInscriptions();
+      if (illisibles.length > 0) {
+        console.warn(`[rappels] propriétaire illisible pour ${illisibles.length} inscription(s), non vérifiée(s) : ${illisibles.map((i) => i.matrixUserId).join(", ")}`);
+      }
+      const nouvelles = etrangeres.filter((i) => !isKnownInscription(i.matrixUserId, i.calDavUrl));
+      if (nouvelles.length === 0) return;
+      const users = nouvelles.map((i) => i.matrixUserId);
+      console.warn(`[rappels] ${users.length} inscription(s) sur l'agenda d'un autre compte : ${users.join(", ")}`);
+      if (config.rappels.dryRun) return;
+      await this.notifyAdmin(buildForeignInscriptionsNotice(users));
+      for (const i of nouvelles) markKnownInscription(i.matrixUserId, i.calDavUrl);
+    } catch (err) {
+      console.error("[rappels] vérification des propriétaires impossible :", err);
+    }
   }
 
   // Inactive-room sweep (tools/inactivite.ts) over the rooms the bot created.
@@ -1770,21 +1815,43 @@ export class MatrixConnector {
     record({ user: sender, room: roomId, kind: "slash", text: "/rappels-calendrier", status: "ok", detail: "dm-sent" });
   }
 
-  // Handle a CalDAV URL the user sent in their DM while we were awaiting it.
-  // Tests access with the service credentials; on success stores the
-  // inscription as `actif`, otherwise reports an error and stores nothing.
+  // Handle a DM from someone in the middle of a reminder inscription: their
+  // CalDAV URL, or, when the calendar's addresses did not match their Tchap
+  // account, their answer to the proof. A URL that is not a La Suite CalDAV
+  // URL is never contacted: the bot would send it the service credentials.
   private async handleRappelsUrlReply(
     dmRoomId: string,
     sender: string,
     body: string,
     userEventId: string,
   ): Promise<void> {
-    const url = extractCalDavUrl(body);
-    if (!url) {
+    const pending = this.pendingRappels.get(sender, dmRoomId, Date.now());
+    const extracted = extractCalDavUrl(body);
+    // Waiting for the proof: a different URL starts over, anything else —
+    // the same URL again included — answers it.
+    if (
+      pending?.preuve &&
+      (extracted.kind !== "ok" || extracted.url === pending.preuve.url)
+    ) {
+      await this.handleRappelsProofReply(dmRoomId, sender, body, userEventId, pending.preuve);
+      return;
+    }
+    if (extracted.kind === "none") {
       await this.sendMessage(dmRoomId, buildNoUrlMessage());
       record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-url", status: "error", detail: "no-url" });
       return;
     }
+    if (extracted.kind === "refused") {
+      // Still waiting: the user can paste the right link.
+      await this.sendReaction(dmRoomId, userEventId, "⛔");
+      await this.sendMessage(
+        dmRoomId,
+        buildRefusedUrlMessage(config.caldav.allowedHosts[0] ?? "messagerie.numerique.gouv.fr"),
+      );
+      record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-url", status: "refused", detail: "url-refused" });
+      return;
+    }
+    const url = extracted.url;
     const test = await testAccess(url);
     if (!test.ok) {
       this.pendingRappels.clear(sender);
@@ -1796,6 +1863,82 @@ export class MatrixConnector {
       record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-url", status: "error", detail: `caldav ${test.status}` });
       return;
     }
+    // Every member shared their calendar with the service account: reading it
+    // is not proof that it belongs to whoever pasted the URL.
+    const owners = await calendarOwnerEmails(url);
+    if (ownsCalendar(sender, owners)) {
+      await this.subscribeRappels(dmRoomId, sender, url, userEventId);
+      return;
+    }
+    const code = newProofCode();
+    this.pendingRappels.askProof(sender, { url, code, owners }, Date.now());
+    await this.sendReaction(dmRoomId, userEventId, "🔐");
+    await this.sendMessage(dmRoomId, buildProofChallengeMessage(code));
+    record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-url", status: "ok", detail: owners.length > 0 ? "proof-asked mismatch" : "proof-asked no-owner" });
+  }
+
+  // The proof step: the user says `ok` once they created an event titled with
+  // the code in the calendar. Only an event nobody else takes part in counts
+  // (see hasProofEvent).
+  private async handleRappelsProofReply(
+    dmRoomId: string,
+    sender: string,
+    body: string,
+    userEventId: string,
+    preuve: Preuve,
+  ): Promise<void> {
+    const reply = readProofReply(body);
+    if (reply === "annuler") {
+      this.pendingRappels.clear(sender);
+      await this.sendMessage(dmRoomId, buildProofCancelledMessage());
+      record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-proof", status: "ok", detail: "proof-cancelled" });
+      return;
+    }
+    if (reply === "autre") {
+      await this.sendMessage(dmRoomId, buildProofPendingMessage(preuve.code));
+      return;
+    }
+    const day = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const res = await fetchEvents(preuve.url, new Date(now - day), new Date(now + 2 * day));
+    if (!res.ok) {
+      // The calendar could not be read this time: the proof stays pending.
+      await this.sendReaction(dmRoomId, userEventId, "⚠️");
+      await this.sendMessage(
+        dmRoomId,
+        buildAccessErrorMessage(config.caldav.user ?? "le compte du bot", config.matrix.contact),
+      );
+      record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-proof", status: "error", detail: `caldav ${res.status}` });
+      return;
+    }
+    if (hasProofEvent(res.events, preuve.code, preuve.owners)) {
+      await this.subscribeRappels(dmRoomId, sender, preuve.url, userEventId, preuve.code);
+      return;
+    }
+    const essais = this.pendingRappels.failedProof(sender);
+    if (essais >= MAX_ESSAIS_PREUVE) {
+      this.pendingRappels.clear(sender);
+      await this.sendReaction(dmRoomId, userEventId, "⛔");
+      await this.sendMessage(dmRoomId, buildProofFailedMessage());
+      record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-proof", status: "refused", detail: "proof-failed" });
+      return;
+    }
+    await this.sendMessage(
+      dmRoomId,
+      buildProofNotFoundMessage(preuve.code, MAX_ESSAIS_PREUVE - essais),
+    );
+    record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-proof", status: "error", detail: `proof-not-found ${essais}` });
+  }
+
+  // Store the inscription as `actif` once the calendar is known to be the
+  // user's. `proofCode`: it went through the proof step.
+  private async subscribeRappels(
+    dmRoomId: string,
+    sender: string,
+    url: string,
+    userEventId: string,
+    proofCode?: string,
+  ): Promise<void> {
     const now = new Date();
     try {
       await upsertInscription({
@@ -1817,9 +1960,11 @@ export class MatrixConnector {
       return;
     }
     this.pendingRappels.clear(sender);
+    // Proven: the startup audit must not report it to the admin.
+    if (proofCode) markKnownInscription(sender, url);
     await this.sendReaction(dmRoomId, userEventId, "✅");
-    await this.sendMessage(dmRoomId, buildSuccessMessage());
-    record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-url", status: "ok" });
+    await this.sendMessage(dmRoomId, buildSuccessMessage(proofCode));
+    record({ user: sender, room: dmRoomId, kind: "dm", text: "caldav-url", status: "ok", detail: proofCode ? "proof-ok" : "owner-ok" });
   }
 
   private async sendMessage(

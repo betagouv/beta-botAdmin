@@ -13,6 +13,20 @@ function firstNonEmpty(names: string[], fallback: string): string {
   return fallback;
 }
 
+// Bare host names only. A scheme, port or path in the value would refuse
+// every stored calendar URL, and the scheduler would flag every inscription as
+// broken on its first tick: such entries are dropped, loudly.
+function hostList(name: string, fallback: string[]): string[] {
+  const raw = optionalList(name).map((h) => h.toLowerCase());
+  const ok = raw.filter((h) => /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(h));
+  for (const h of raw) {
+    if (!ok.includes(h)) {
+      console.error(`[config] ${name} : « ${h} » ignoré, ce n'est pas un nom d'hôte nu`);
+    }
+  }
+  return ok.length > 0 ? ok : fallback;
+}
+
 function optionalList(name: string): string[] {
   const val = process.env[name];
   if (!val) return [];
@@ -127,6 +141,9 @@ export const config = {
     // credentials authenticate the request.
     user: process.env["CALDAV_USER"],
     password: process.env["CALDAV_PASSWORD"],
+    // Hosts the service credentials may ever be sent to. A calendar URL comes
+    // from the user, so anything else is refused before any request goes out.
+    allowedHosts: hostList("CALDAV_ALLOWED_HOSTS", ["messagerie.numerique.gouv.fr"]),
     // POC only: a single hardcoded calendar URL to validate the read flow
     // (section 7.1 of docs/rappels-calendrier.md). Remove once inscription
     // stores per-user URLs.

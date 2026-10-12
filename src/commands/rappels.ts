@@ -5,13 +5,29 @@
 // the message templates. The MatrixConnector wires these to the actual DM
 // send/receive and the CalDAV test + Grist upsert.
 
-import { isMeetingUrl } from "../connectors/caldav.js";
+import { randomInt } from "node:crypto";
+import { checkCalendarUrl, isMeetingUrl } from "../connectors/caldav.js";
 
-// A user who ran /rappels-calendrier and now owes us a CalDAV URL in their DM.
+// The calendar's addresses don't match the user's Tchap account: they must
+// prove the calendar is theirs by creating an event titled `code` in it.
+export interface Preuve {
+  url: string;
+  code: string;
+  // The owner's addresses, as La Suite gave them (may be empty).
+  owners: string[];
+  essais: number;
+}
+
+// A user who ran /rappels-calendrier and now owes us a CalDAV URL in their DM,
+// or, once the URL is in, the proof that the calendar is theirs.
 interface Pending {
   dmRoomId: string;
   since: number;
+  preuve?: Preuve;
 }
+
+// Wrong answers to the proof before the inscription is dropped.
+export const MAX_ESSAIS_PREUVE = 5;
 
 // Tracks the in-flight inscriptions, keyed by Matrix user id. In-memory only:
 // on a bot restart the user simply re-runs the command. A pending entry is
@@ -26,15 +42,42 @@ export class PendingInscriptions {
     this.map.set(userId, { dmRoomId, since: now });
   }
 
-  // Is this user awaiting URL entry in this specific DM room (and not expired)?
-  isAwaiting(userId: string, dmRoomId: string, now: number): boolean {
+  // The in-flight inscription of this user in this specific DM room, unless
+  // it expired.
+  get(userId: string, dmRoomId: string, now: number): Pending | undefined {
     const p = this.map.get(userId);
-    if (!p) return false;
+    if (!p) return undefined;
     if (now - p.since > this.ttlMs) {
       this.map.delete(userId);
-      return false;
+      return undefined;
     }
-    return p.dmRoomId === dmRoomId;
+    return p.dmRoomId === dmRoomId ? p : undefined;
+  }
+
+  // Is this user awaiting URL entry in this specific DM room (and not expired)?
+  isAwaiting(userId: string, dmRoomId: string, now: number): boolean {
+    return this.get(userId, dmRoomId, now) !== undefined;
+  }
+
+  // Switch to the proof step. The clock restarts: the user gets a full TTL to
+  // create the event.
+  askProof(
+    userId: string,
+    preuve: Omit<Preuve, "essais">,
+    now: number,
+  ): void {
+    const p = this.map.get(userId);
+    if (!p) return;
+    p.preuve = { ...preuve, essais: 0 };
+    p.since = now;
+  }
+
+  // Count a proof that was not found; returns how many have failed so far.
+  failedProof(userId: string): number {
+    const preuve = this.map.get(userId)?.preuve;
+    if (!preuve) return 0;
+    preuve.essais += 1;
+    return preuve.essais;
   }
 
   clear(userId: string): void {
@@ -42,16 +85,58 @@ export class PendingInscriptions {
   }
 }
 
-// Pull a CalDAV URL out of a free-text DM reply. Prefers a La Suite
-// (messagerie.numerique.gouv.fr) DAV URL, else falls back to the first http(s)
-// URL in the message. Trailing punctuation is trimmed.
-export function extractCalDavUrl(body: string): string | null {
-  const urls = body.match(/https?:\/\/\S+/g) ?? [];
-  const cleaned = urls.map((u) => u.replace(/[.,;)\]]+$/, ""));
-  const preferred = cleaned.find(
-    (u) => /messagerie\.numerique\.gouv\.fr/i.test(u) && /caldav|dav/i.test(u),
-  );
-  return preferred ?? cleaned[0] ?? null;
+// Drop the quoted lines a Matrix reply puts before the answer ("> <@bot> …"):
+// the bot's own words, URL template included, are not the user's answer.
+function sansCitation(body: string): string {
+  return body
+    .split("\n")
+    .filter((l) => !l.startsWith(">"))
+    .join("\n");
+}
+
+export type ExtractedUrl =
+  | { kind: "ok"; url: string }
+  // The message holds links, none of them a La Suite CalDAV URL.
+  | { kind: "refused" }
+  | { kind: "none" };
+
+// Pull a CalDAV URL out of a free-text DM reply: the first link that passes
+// checkCalendarUrl. Any other link is never contacted — the bot would send it
+// the service account's credentials. Trailing punctuation is trimmed.
+export function extractCalDavUrl(body: string): ExtractedUrl {
+  const urls = sansCitation(body).match(/https?:\/\/\S+/gi) ?? [];
+  const cleaned = urls.map((u) => u.replace(/[.,;:!?)\]>"'`*»’]+$/, ""));
+  for (const u of cleaned) {
+    const check = checkCalendarUrl(u);
+    if (check.ok) return { kind: "ok", url: check.url };
+  }
+  return cleaned.length > 0 ? { kind: "refused" } : { kind: "none" };
+}
+
+// Code the user puts in an event title to prove the calendar is theirs. No
+// 0/O or 1/I/L, so it survives being retyped.
+const ALPHABET_CODE = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+export function newProofCode(): string {
+  let s = "";
+  for (let i = 0; i < 6; i++) s += ALPHABET_CODE[randomInt(ALPHABET_CODE.length)];
+  return `betabot-${s}`;
+}
+
+// What a DM means while the proof is awaited. A quoted reply, a typographic
+// apostrophe, punctuation, an emoji or the calendar URL pasted again around
+// the `ok` don't change it — but the whole message must be the answer: « ok je
+// regarde » or « fait pas encore » must not burn one of the tries.
+export function readProofReply(body: string): "ok" | "annuler" | "autre" {
+  const t = sansCitation(body)
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/[’‘]/g, "'")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}' ]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (/^(ok|okay|c'est fait|c fait|fait|done)( (merci|c'est bon|voilà|voila))?$/.test(t)) return "ok";
+  if (/^(annuler|annule|stop)$/.test(t)) return "annuler";
+  return "autre";
 }
 
 // ─── Message templates ───────────────────────────────────────────────────────
@@ -88,8 +173,53 @@ export function buildNoUrlMessage(): string {
   ].join("\n");
 }
 
-export function buildSuccessMessage(): string {
-  return "✅ C'est bon, tu seras prévenu·e avant ton prochain rendez-vous.";
+// `proofCode`: the inscription went through the proof step, the event can go.
+export function buildSuccessMessage(proofCode?: string): string {
+  const ok = "✅ C'est bon, tu seras prévenu·e avant ton prochain rendez-vous.";
+  return proofCode
+    ? `${ok}\n\nTu peux supprimer l'événement \`${proofCode}\` de ton agenda.`
+    : ok;
+}
+
+export function buildRefusedUrlMessage(host: string): string {
+  return [
+    "⛔ Ce lien n'est pas une URL CalDAV La Suite : je ne l'ai pas ouvert.",
+    "",
+    `Elle commence par \`https://${host}/dav/caldav/\`. Tu la trouves dans le ` +
+      "menu de ton agenda → *Propriétés* → champ *URL CalDAV*.",
+  ].join("\n");
+}
+
+export function buildProofChallengeMessage(code: string): string {
+  return [
+    "🔐 Cet agenda n'est pas rattaché à l'adresse de ton compte Tchap. " +
+      "Avant de t'inscrire, je dois vérifier qu'il est bien à toi.",
+    "",
+    `1. Dans cet agenda, crée un événement **aujourd'hui** intitulé \`${code}\`, sans inviter personne.`,
+    "2. Réponds `ok` ici.",
+    "",
+    "Tu pourras supprimer l'événement juste après. Pour abandonner : `annuler`.",
+  ].join("\n");
+}
+
+export function buildProofPendingMessage(code: string): string {
+  return `⏳ J'attends ta preuve : un événement \`${code}\` dans ton agenda, puis \`ok\` ici. Pour abandonner : \`annuler\`.`;
+}
+
+export function buildProofNotFoundMessage(code: string, restants: number): string {
+  return [
+    `🔎 Je ne trouve pas d'événement \`${code}\` sans invité dans cet agenda, entre hier et demain.`,
+    "",
+    `Vérifie le titre, puis réponds \`ok\` (encore ${restants} essai${restants > 1 ? "s" : ""}), ou \`annuler\`.`,
+  ].join("\n");
+}
+
+export function buildProofFailedMessage(): string {
+  return "⛔ Je n'ai pas trouvé la preuve : inscription abandonnée. Relance `/rappels-calendrier` pour recommencer.";
+}
+
+export function buildProofCancelledMessage(): string {
+  return "👌 Inscription abandonnée. Relance `/rappels-calendrier` quand tu veux.";
 }
 
 export function buildAccessErrorMessage(
