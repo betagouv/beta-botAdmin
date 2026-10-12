@@ -29,7 +29,6 @@ export const config = {
     user: process.env["MATRIX_USER"],
     accessToken: process.env["MATRIX_ACCESS_TOKEN"],
     password: process.env["MATRIX_PASSWORD"],
-    deviceId: process.env["MATRIX_DEVICE_ID"],
     allowedRooms: optionalList("MATRIX_ALLOWED_ROOMS"),
     commandRooms: optionalList("MATRIX_COMMAND_ROOMS"),
     // Users allowed to run slash commands via a direct message (DM) with the
@@ -59,14 +58,9 @@ export const config = {
     // Users invited (as moderators) when the bot creates a room for itself —
     // i.e. a self command (e.g. n8n posting with the bot's account): the bot
     // can't invite its own account, so these people get invited instead.
-    // Override via MATRIX_DEFAULT_INVITES (comma-separated mxids).
-    defaultInvites:
-      optionalList("MATRIX_DEFAULT_INVITES").length > 0
-        ? optionalList("MATRIX_DEFAULT_INVITES")
-        : [
-            "@maxime.torgue-modernisation.gouv.fr:agent.dinum.tchap.gouv.fr",
-            "@julien.bouquillon-beta.gouv.fr:agent.dinum.tchap.gouv.fr",
-          ],
+    // Comma-separated mxids (MATRIX_DEFAULT_INVITES). Empty = such a room holds
+    // only the bot, and a warning is logged when it happens.
+    defaultInvites: optionalList("MATRIX_DEFAULT_INVITES"),
     managedSpace: process.env["MATRIX_MANAGED_SPACE"],
     // Contact shown in the generic reply when someone talks to the bot outside a command.
     contact: process.env["MATRIX_CONTACT"],
@@ -75,7 +69,6 @@ export const config = {
     url: process.env["DIMAIL_URL"],
     user: process.env["DIMAIL_USER"],
     password: process.env["DIMAIL_PASSWORD"],
-    token: process.env["DIMAIL_TOKEN"],
     domain: process.env["DIMAIL_DOMAIN"],
   },
   grist: {
@@ -145,11 +138,20 @@ export const config = {
       "https://messagerie.numerique.gouv.fr/appsuite/",
     ),
   },
+  alerte: {
+    // /alerte: people invited into every alert room — the référents
+    // techs and SSI of the procedure (comma-separated mxids). Empty = the room
+    // holds only whoever raised the alert, and the reply says so.
+    referents: optionalList("ALERTE_SECU_REFERENTS"),
+    // Room where the alert is announced with @room (~Domaine-secu). The bot
+    // must be a member there, at a level allowed to notify @room (usually 50).
+    room: process.env["ALERTE_SECU_ROOM"],
+  },
   n8n: {
     // Webhook that handles the member-list command (/invite). The bot forwards
-    // the parsed command to it; n8n reads Grist, performs the invitations, and
-    // returns the reply the bot posts. Empty → the command is reported as
-    // unavailable.
+    // the parsed command to it; n8n reads the espace-membre database, performs
+    // the invitations, and returns the reply the bot posts. Empty → the command
+    // is reported as unavailable.
     membresWebhookUrl: process.env["N8N_MEMBRES_WEBHOOK_URL"],
     // Optional shared secret sent as `X-Betabot-Secret` so n8n can reject
     // requests that don't come from the bot.

@@ -60,7 +60,7 @@ function serverName(id: string): string {
 // tells the client which server to reach the room through, needed for id-based
 // links. `label` is the visible text (falls back to the id). Bold it upstream
 // if wanted: roomLink(id, `**${name}**`).
-function roomLink(roomId: string, label?: string): string {
+export function roomLink(roomId: string, label?: string): string {
   const via = serverName(roomId);
   const url = `https://matrix.to/#/${encodeURIComponent(roomId)}${
     via ? `?via=${encodeURIComponent(via)}` : ""
@@ -239,15 +239,6 @@ async function resolveRoom(
   return { room: matches[0]!, ambiguous: false };
 }
 
-// Whether a user is a joined member of a room/space (exported for /invite).
-export async function isMemberOf(
-  client: MatrixClient,
-  roomId: string,
-  userId: string,
-): Promise<boolean> {
-  return isRoomMember(client, roomId, userId);
-}
-
 export type InvitePermission =
   | { ok: true }
   | { ok: false; reason: "not-member" }
@@ -324,8 +315,8 @@ export async function canPromote(
 }
 
 // The display name of a room, or "" when it has none / isn't readable.
-async function roomName(
-  client: MatrixClient,
+export async function roomName(
+  client: Pick<MatrixClient, "getRoomStateEvent">,
   roomId: string,
 ): Promise<string> {
   try {
@@ -554,8 +545,8 @@ export function moderatorPowerLevels(
 // event because Synapse rejects a full power-level override at create time.
 // Returns false when the homeserver refused: the caller says so in its reply
 // rather than leaving someone with a room they silently cannot manage.
-async function grantModeratorRights(
-  client: MatrixClient,
+export async function grantModeratorRights(
+  client: Pick<MatrixClient, "getRoomStateEvent" | "sendStateEvent">,
   roomId: string,
 ): Promise<boolean> {
   try {
@@ -601,6 +592,25 @@ function rightsLine(kind: "salon" | "espace", ok: boolean): string {
   );
 }
 
+// Who gets invited into a room or space the bot creates: the requester, or —
+// when the bot created it for itself (self command, e.g. via n8n) — the
+// configured default invitees. The bot's own account must never be in the
+// list: inviting yourself (or a user already in the room) is rejected by the
+// server with M_FORBIDDEN.
+function inviteesFor(inviteUserId: string, botUserId: string): string[] {
+  const invitees = (
+    inviteUserId && inviteUserId !== botUserId
+      ? [inviteUserId]
+      : config.matrix.defaultInvites
+  ).filter((u) => u !== botUserId);
+  if (invitees.length === 0) {
+    console.warn(
+      "[rooms] personne à inviter : MATRIX_DEFAULT_INVITES est vide, le bot sera seul dans ce qu'il crée.",
+    );
+  }
+  return invitees;
+}
+
 async function createRoom(
   client: MatrixClient,
   spaceId: string,
@@ -623,15 +633,7 @@ async function createRoom(
     };
   }
 
-  // Who gets invited: the requester, or — when the bot created the room for
-  // itself (self command, e.g. via n8n) — the configured default invitees.
-  // The bot's own account must never be in the list: inviting yourself (or a
-  // user already in the room) is rejected by the server with M_FORBIDDEN.
-  const invitees = (
-    inviteUserId && inviteUserId !== botUserId
-      ? [inviteUserId]
-      : config.matrix.defaultInvites
-  ).filter((u) => u !== botUserId);
+  const invitees = inviteesFor(inviteUserId, botUserId);
 
   // Keep the bot as admin (100) and make every invitee a moderator (50) so
   // they can manage/close the room. `users` is replaced wholesale by the
@@ -678,7 +680,7 @@ async function createRoom(
     via: [serverName(roomId)],
   });
 
-  // Track it so `/salon` commands can manage it later.
+  // Record it in data/created-rooms.json (see created-rooms.ts).
   addCreatedRoom(roomId, name);
 
   return {
@@ -717,11 +719,7 @@ async function createSpace(
     };
   }
 
-  const invitees = (
-    inviteUserId && inviteUserId !== botUserId
-      ? [inviteUserId]
-      : config.matrix.defaultInvites
-  ).filter((u) => u !== botUserId);
+  const invitees = inviteesFor(inviteUserId, botUserId);
 
   // Bot stays admin (100), invitees become moderators (50).
   const users: Record<string, number> = { [botUserId]: 100 };
@@ -744,6 +742,15 @@ async function createSpace(
         state_key: parentSpaceId,
         content: { via: [parentVia], canonical: true },
       },
+      // Tchap's « Aperçu de l'espace » toggle: someone invited (or browsing
+      // the parent) sees the space, its members and its rooms before joining.
+      // Joining a private space still takes an invite. A moderator can switch
+      // it off in the space settings (history visibility is delegated to 50).
+      {
+        type: "m.room.history_visibility",
+        state_key: "",
+        content: { history_visibility: "world_readable" },
+      },
     ],
   });
 
@@ -761,7 +768,7 @@ async function createSpace(
     reaction: "✅",
     // The space name is a clickable pill; the raw ID is kept because
     // `/invite --espace <id>` needs it (a space has no composer to read it from).
-    message: `🌌 Espace ${roomLink(spaceId, `**${name}**`)} créé (${encrypted ? "privé" : "public"}) et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID (pour \`/invite --espace\`) : \`${spaceId}\`${rightsLine("espace", rightsOk)}`,
+    message: `🌌 Espace ${roomLink(spaceId, `**${name}**`)} créé (${encrypted ? "privé" : "public"}, aperçu ouvert avant de rejoindre) et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID (pour \`/invite --espace\`) : \`${spaceId}\`${rightsLine("espace", rightsOk)}`,
   };
 }
 
@@ -989,7 +996,7 @@ function spacesHelpMessage(): RoomCmdResult {
 |---|---|
 | \`/espace list\` | Liste les sous-espaces de l'espace géré |
 | \`/espace list <espace>\` | Liste les sous-espaces d'un sous-espace (nom ou ID, à n'importe quelle profondeur) |
-| \`/espace create <nom>\` | Crée un sous-espace (**privé**) et le rattache à l'espace géré |
+| \`/espace create <nom>\` | Crée un sous-espace (**privé**, avec **aperçu** : on voit l'espace et ses salons avant de le rejoindre) et le rattache à l'espace géré |
 | \`/espace create <nom> --clair\` | Idem mais **public** (découvrable). Un espace ne portant pas de messages, \`--clair\` n'agit que sur la visibilité |
 | \`/espace create <nom> <espace-parent>\` | Crée un sous-espace **imbriqué** dans **<espace-parent>** (nom ou ID). Nom avec des espaces : entre guillemets — \`/espace create <nom> "Pole Tech"\` |
 | \`/espace delete <nom>\` | Supprime un sous-espace **vide** (réservé à un utilisateur autorisé, en MP) |

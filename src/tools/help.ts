@@ -1,7 +1,10 @@
 import { config } from "../config.js";
 
-export function buildHelp(): string {
-  return buildBotHelp();
+// `handle` is what to type before a command to reach the bot by hand, e.g.
+// "@betabot+admin" (see tools/mention.ts). The examples are meant to be copied
+// as they are, so they carry it instead of a name the bot would not answer to.
+export function buildHelp(handle: string): string {
+  return buildBotHelp(handle);
 }
 
 // OPS-request help, shown by `/help` inside the rooms listed in
@@ -43,7 +46,7 @@ Chaque type a aussi un champ **Commentaires** (libre).
 > Si ton type de demande n'est pas dans la liste : pose la question directement ici, sur le canal \`~Demandes-OPS\`.`;
 }
 
-function buildBotHelp(): string {
+function buildBotHelp(handle: string): string {
   const cmdRooms = config.matrix.commandRooms;
   const cmdWhere = config.matrix.commandRoomsLabel
     ? config.matrix.commandRoomsUrl
@@ -57,7 +60,7 @@ function buildBotHelp(): string {
 
 Je suis un bot **à commandes** : je ne discute pas en langage naturel.
 
-Dans ${cmdWhere}, **mentionne-moi suivi d'une commande**, par exemple \`@betabot /help\`.
+Dans ${cmdWhere}, **mentionne-moi suivi d'une commande**, par exemple \`${handle} /help\`.
 
 ## Commandes
 
@@ -65,13 +68,14 @@ Une commande **de base** par ligne (la plus courante). Toutes les variantes et o
 
 | Commande de base | Ce qu'elle fait | Tout le reste |
 |---|---|---|
-| \`@betabot /help\` | Affiche cette aide | — |
-| \`@betabot /emails join <liste> <email>\` | Ajoute quelqu'un à une mailing list | \`@betabot /emails help\` |
-| \`@betabot /salon create <nom>\` | Crée un salon dans l'espace géré | \`@betabot /salon help\` |
-| \`@betabot /espace create <nom>\` | Crée un sous-espace | \`@betabot /espace help\` |
-| \`@betabot /invite <startup>\` | Invite une startup dans le salon où tu tapes | \`@betabot /invite help\` |
-| \`@betabot /rappels-calendrier\` | Active les rappels avant tes réunions (réglage en MP) | — |
-| \`@betabot /rappels-stop\` | Coupe tes rappels de réunion | — |
+| \`${handle} /help\` | Affiche cette aide | — |
+| \`${handle} /emails join <liste> <email>\` | Ajoute quelqu'un à une mailing list | \`${handle} /emails help\` |
+| \`${handle} /salon create <nom>\` | Crée un salon dans l'espace géré | \`${handle} /salon help\` |
+| \`${handle} /espace create <nom>\` | Crée un sous-espace | \`${handle} /espace help\` |
+| \`${handle} /invite <startup>\` | Invite une startup dans le salon où tu tapes | \`${handle} /invite help\` |
+| \`${handle} /alerte\` | Alerte sécurité sur un composant vulnérable : je te pose les questions en MP, puis j'ouvre le salon dédié | \`${handle} /alerte help\` |
+| \`${handle} /rappels-calendrier\` | Active les rappels avant tes réunions (réglage en MP) | — |
+| \`${handle} /rappels-stop\` | Coupe tes rappels de réunion | — |
 
 > ⚠️ Un texte sans commande ne renvoie qu'un message générique, et sans \`@\` ni \`/\` dans un salon je reste silencieux.
 

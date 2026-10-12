@@ -39,7 +39,8 @@ export function isInviteHelp(text: string): boolean {
   return arg === "" || arg === "help" || arg === "aide";
 }
 
-export function buildInviteHelp(): string {
+// `handle`: what to type before a command to reach the bot, see buildHelp.
+export function buildInviteHelp(handle: string): string {
   return [
     "# `/invite` — inviter les membres d'une startup",
     "",
@@ -47,28 +48,28 @@ export function buildInviteHelp(): string {
     "",
     "| Commande | Effet |",
     "|---|---|",
-    "| `@betabot /invite <startup>` | Invite la startup **dans le salon où tu tapes** |",
-    "| `@betabot /invite <startup> --espace` | Invite la startup dans l'**espace qui contient ce salon** |",
-    "| `@betabot /invite <startup> --salon <nom>` | Invite la startup dans le **salon** <nom> |",
-    "| `@betabot /invite <startup> --espace <!id:serveur>` | Invite la startup dans l'**espace** d'ID donné |",
-    "| `@betabot /invite <startup> --domaine <domaine>` | N'invite que les membres de ce **domaine** |",
-    "| `@betabot /invite <startup> --moderateur` | Invite **et** passe chacun **modérateur** |",
-    "| `@betabot /invite <startup> --simuler` | **N'invite personne** : affiche **qui** serait invité |",
-    "| `@betabot /invite help` | Affiche cette aide |",
+    `| \`${handle} /invite <startup>\` | Invite la startup **dans le salon où tu tapes** |`,
+    `| \`${handle} /invite <startup> --espace\` | Invite la startup dans l'**espace qui contient ce salon** |`,
+    `| \`${handle} /invite <startup> --salon <nom>\` | Invite la startup dans le **salon** <nom> |`,
+    `| \`${handle} /invite <startup> --espace <!id:serveur>\` | Invite la startup dans l'**espace** d'ID donné |`,
+    `| \`${handle} /invite <startup> --domaine <domaine>\` | N'invite que les membres de ce **domaine** |`,
+    `| \`${handle} /invite <startup> --moderateur\` | Invite **et** passe chacun **modérateur** |`,
+    `| \`${handle} /invite <startup> --simuler\` | **N'invite personne** : affiche **qui** serait invité |`,
+    `| \`${handle} /invite help\` | Affiche cette aide |`,
     "",
     "- Le nom de la startup vient **en premier**, avant les options.",
     "- L'ordre des options n'importe pas ; elles se combinent.",
     "- `--domaine` est optionnel : sans lui, **tous** les membres de la startup sont invités.",
     "- Domaines : `Animation`, `Attributaire`, `Autre`, `Coaching`, `Data`, `Déploiement`, `Design`, `Développement`, `Intraprenariat`, `Produit`, `Support`. Casse et accents ignorés ; un préfixe marche s'il est **sans ambiguïté** (ex. `dev`, `depl`, `desi`, `data`).",
     "- `--espace` **sans valeur** vise l'espace parent : un espace n'a pas de zone de saisie, on se place donc dans un de ses salons.",
-    "- `--espace` **avec valeur** attend l'**ID** (`!xxxx:serveur`), pas le nom : récupère-le avec `@betabot /espace list`.",
+    `- \`--espace\` **avec valeur** attend l'**ID** (\`!xxxx:serveur\`), pas le nom : récupère-le avec \`${handle} /espace list\`.`,
     "- `--salon` accepte le **nom** ou l'ID. Nom avec des espaces : entre guillemets — `--salon \"Mon Salon\"`.",
     "- Le salon/espace visé est cherché **sous l'espace géré**.",
     "- Tu dois avoir le **droit d'inviter** dans le salon/espace ciblé — être simple membre ne suffit pas si le salon réserve l'invitation aux modérateurs.",
     "- `--moderateur` exige que tu sois **toi-même modérateur** (niveau ≥ 50) dans la cible : on ne donne pas un pouvoir qu'on n'a pas.",
     "- `--simuler` (ou `--dry-run`) fait une **répétition générale** : la cible est résolue, tes droits vérifiés et la liste des membres constituée pour de vrai — puis le bot affiche **qui** serait invité, sans envoyer une seule invitation.",
     "",
-    "**Exemple** : depuis un salon de l'espace, `@betabot /invite api-engagement --espace --domaine dev`",
+    `**Exemple** : depuis un salon de l'espace, \`${handle} /invite api-engagement --espace --domaine dev\``,
   ].join("\n");
 }
 

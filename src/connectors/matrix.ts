@@ -40,6 +40,22 @@ import { forwardMembresCommand, statutPourReaction } from "../connectors/n8n.js"
 import { parseInviteArgs, isInviteHelp, buildInviteHelp, unknownInviteFlags } from "../commands/invite.js";
 import { resolveInviteTarget, canInvite, canPromote } from "../commands/rooms.js";
 import { buildHelp, buildOpsHelp } from "../tools/help.js";
+import { mentionHandle, mentionNames, typedMentions } from "../tools/mention.js";
+import {
+  ConversationsAlerte,
+  isAlerteCommand,
+  parseAlerte,
+  buildAlerteHelp,
+  alerteOuverte,
+  rejoindreAlerte,
+  recapAlerte,
+  referentsAInviter,
+  libelleAnnonce,
+  lancerAlerteSecu,
+  type Mentions,
+  type SalonsCrees,
+} from "../commands/alerte.js";
+import { addCreatedRoom, findCreatedRoom } from "../commands/created-rooms.js";
 
 // Publicly advertised commands (shown in /help, the generic notice and the
 // "unknown command" hint). `/historique` is admin-only and intentionally left
@@ -50,6 +66,7 @@ const KNOWN_COMMANDS = [
   "/salon",
   "/espace",
   "/invite",
+  "/alerte",
   "/rappels-calendrier",
   "/rappels-stop",
 ] as const;
@@ -294,8 +311,15 @@ export class MatrixConnector {
   private resolvedToken = "";
   private activeBotThreads = new Set<string>();
   private dmRooms = new Set<string>();
+  // Rooms found to hold more than the bot and one person: never re-checked.
+  private groupRooms = new Set<string>();
   private pendingVerif = new Map<string, VerifState>();
   private pendingRappels = new PendingInscriptions();
+  private alertes = new ConversationsAlerte();
+  private readonly salonsCrees: SalonsCrees = {
+    find: findCreatedRoom,
+    add: addCreatedRoom,
+  };
   private reminderTimer?: ReturnType<typeof setInterval>;
   private inactivityTimer?: ReturnType<typeof setInterval>;
   private startupTs = Date.now();
@@ -408,6 +432,13 @@ export class MatrixConnector {
     await this.sendMessage(roomId, text);
   }
 
+  // What to type before a command to reach the bot by hand, e.g.
+  // "@betabot+admin". Printed in the help and sent to n8n, which suggests
+  // commands in its replies (see tools/mention.ts).
+  private get botHandle(): string {
+    return mentionHandle(this.ownUserId, this.ownDisplayName);
+  }
+
   // Send a one-off notice to the first configured admin, via DM.
   private async notifyAdmin(text: string): Promise<void> {
     const admin = config.matrix.adminUsers[0];
@@ -432,6 +463,13 @@ export class MatrixConnector {
     console.log(
       `[rappels] scheduler actif: tick ${cfg.intervalMin} min, lead ${cfg.leadMin} min, fenêtre ${cfg.windowMin} min, dryRun=${cfg.dryRun}`,
     );
+    // Dry run is the default, so a deployment that forgot the variable looks
+    // healthy while every subscriber waits for reminders that never come.
+    if (cfg.dryRun) {
+      console.warn(
+        "[rappels] ⚠️ DRY RUN : aucun rappel n'est envoyé, ils sont seulement journalisés. Mettre RAPPELS_DRY_RUN=false pour les envoyer.",
+      );
+    }
     const tick = async (): Promise<void> => {
       try {
         const res = await runReminderTick({
@@ -444,7 +482,7 @@ export class MatrixConnector {
           notifyAdmin: (text) => this.notifyAdmin(text),
         });
         console.log(
-          `[rappels] tick: ${res.inscriptions} inscription(s), ${res.events} event(s), ${res.sent} envoyé(s), ${res.broken} cassé(s)`,
+          `[rappels] tick: ${res.inscriptions} inscription(s), ${res.events} event(s), ${res.sent} envoyé(s), ${res.broken} cassé(s), ${res.purged} purgé(s)`,
         );
       } catch (err) {
         console.error("[rappels] tick error:", err);
@@ -829,31 +867,45 @@ export class MatrixConnector {
     this.client.on(
       "room.failed_decryption",
       (roomId: string, event: Record<string, unknown>, error: Error) => {
-        console.log(`[Matrix] Decryption failure in ${roomId}:`, error.message);
-        const sender = event.sender as string;
-        if (sender === this.ownUserId) return;
-        const relates = (
-          event.content as Record<string, unknown> | undefined
-        )?.["m.relates_to"] as
-          | { rel_type?: string; event_id?: string }
-          | undefined;
-        const threadRoot =
-          relates?.rel_type === "m.thread"
-            ? (relates.event_id ?? (event.event_id as string))
-            : (event.event_id as string);
-        void this.isDMRoom(roomId).then((isDM) => {
-          const isActiveBotThread = this.activeBotThreads.has(threadRoot ?? "");
-          if (isDM || isActiveBotThread) {
-            void this.sendMessage(
-              roomId,
-              "_(Désolé, je n'ai pas pu déchiffrer votre message 🫣)_",
-              event.event_id as string,
-              isDM ? undefined : (threadRoot ?? undefined),
-            );
-          }
-        });
+        void this.handleFailedDecryption(roomId, event, error);
       },
     );
+  }
+
+  // A message the bot could not decrypt: say so, in a DM or a thread the bot
+  // is part of, so the sender knows it went unread.
+  private async handleFailedDecryption(
+    roomId: string,
+    event: Record<string, unknown>,
+    error: Error,
+  ): Promise<void> {
+    console.log(`[Matrix] Decryption failure in ${roomId}:`, error.message);
+    const sender = event.sender as string;
+    if (sender === this.ownUserId) return;
+    // Same guard as for readable messages: after downtime the first sync
+    // replays weeks of history, and the keys of old messages were never
+    // shared with this device. Apologising for each of them spams every DM.
+    const eventTs = event.origin_server_ts as number | undefined;
+    if (eventTs !== undefined && eventTs < this.startupTs) return;
+    const relates = (
+      event.content as Record<string, unknown> | undefined
+    )?.["m.relates_to"] as
+      | { rel_type?: string; event_id?: string }
+      | undefined;
+    const threadRoot =
+      relates?.rel_type === "m.thread"
+        ? (relates.event_id ?? (event.event_id as string))
+        : (event.event_id as string);
+    const isDM = await this.isDMRoom(roomId);
+    const isActiveBotThread = this.activeBotThreads.has(threadRoot ?? "");
+    if (isDM || isActiveBotThread) {
+      await this.sendMessage(
+        roomId,
+        "_(Désolé, je n'ai pas pu déchiffrer votre message 🫣)_",
+        event.event_id as string,
+        isDM ? undefined : (threadRoot ?? undefined),
+      );
+    }
   }
 
   private async handleIncomingMessage(
@@ -877,20 +929,7 @@ export class MatrixConnector {
     const eventTs = event.origin_server_ts as number | undefined;
     if (eventTs !== undefined && eventTs < this.startupTs) return;
 
-    // DMs always bypass the allowed-rooms filter: a 1:1 room is never in
-    // MATRIX_ALLOWED_ROOMS, so without this exemption the bot would never reply
-    // in private. The room filter only gates group rooms.
-    const isDM = await this.isDMRoom(roomId);
-    if (
-      !isDM &&
-      config.matrix.allowedRooms.length > 0 &&
-      !config.matrix.allowedRooms.includes(roomId)
-    ) {
-      console.log(
-        `[Matrix] Ignoring message in ${roomId} (not in MATRIX_ALLOWED_ROOMS)`,
-      );
-      return;
-    }
+    const isDM = await this.isDMRoom(roomId, true);
 
     const content = event.content as {
       msgtype?: string;
@@ -922,23 +961,12 @@ export class MatrixConnector {
     // the bot's name by hand (no pill) would trigger commands — the plain `body`
     // of a real pill is identical to hand-typed text, so it can't be trusted.
     const mentionUserIds = content["m.mentions"]?.user_ids ?? [];
-    // Names a typed plain-text "@name" must match EXACTLY (case-insensitive) to
-    // count as a mention: the full localpart and the full display name, plus the
-    // display name truncated at its first whitespace (e.g. "Betabot+admin [Beta]"
-    // → "@betabot+admin"). The `+`, `-`, `.` and `_` are kept so the real handle
-    // is matched as a whole — "@betabot" (a mere prefix) does NOT count, only the
-    // complete "betabot+admin" handle triggers the bot.
-    const firstRun = (s: string): string =>
-      s.toLowerCase().match(/^[\p{L}\p{N}._+-]+/u)?.[0] ?? s.toLowerCase();
-    const mentionNames = [localPart, this.ownDisplayName]
-      .filter((p): p is string => !!p)
-      .flatMap((name) => [name.toLowerCase(), firstRun(name)]);
+    // A typed plain-text "@name" counts only when it matches one of the bot's
+    // names EXACTLY — "@betabot" alone is a mere prefix (see tools/mention.ts).
+    const names = mentionNames(this.ownUserId, this.ownDisplayName);
     const matchesBotToken = (token: string): boolean =>
-      mentionNames.includes(token.toLowerCase());
-    const atTokens = (
-      body.toLowerCase().match(/@[\p{L}\p{N}._+-]+/gu) ?? []
-    ).map((t) => t.slice(1));
-    const hasTextMention = atTokens.some(matchesBotToken);
+      names.includes(token.toLowerCase());
+    const hasTextMention = typedMentions(body).some(matchesBotToken);
     const isMentioned = this.ownUserId
       ? decodedFormattedBody.includes(this.ownUserId) ||
         mentionUserIds.includes(this.ownUserId) ||
@@ -993,7 +1021,7 @@ export class MatrixConnector {
     const { text: afterMention, matched: mentionAtStart } = stripLeadingMention(trimmedBody);
 
     // Slash command rule:
-    // - In DM: any leading "/" counts.
+    // - In DM: any leading "/" counts, with or without a mention before it.
     // - From the bot's own account (allowSelfCommands) or an exempted account
     //   (noMentionUsers, e.g. an n8n automation): any leading "/" counts, no
     //   mention needed. Permission checks (rooms, domain, admin) still apply.
@@ -1001,20 +1029,11 @@ export class MatrixConnector {
     //   first char right after the stripped mention text.
     const isNoMentionUser = config.matrix.noMentionUsers.includes(sender);
     const isSlashCommand = isDM || isSelf || isNoMentionUser
-      ? trimmedBody.startsWith("/")
+      ? trimmedBody.startsWith("/") ||
+        (mentionAtStart && afterMention.startsWith("/"))
       : isMentioned && mentionAtStart && afterMention.startsWith("/");
 
-    console.log(
-      `[Matrix] Message from ${sender} in ${roomId} isDM=${isDM} isMentioned=${isMentioned} mentionAtStart=${mentionAtStart} isSlashCommand=${isSlashCommand} body=${JSON.stringify(body.slice(0, 100))}`,
-    );
-
-    // Loop guard: own messages that are not slash commands (i.e. the bot's own
-    // replies) must never reach the dispatch or the generic notice below.
-    if (isSelf && !isSlashCommand) return;
-
-    if (!isDM && !isMentioned && !isSlashCommand) return;
-
-    // For slash dispatch and LLM, prefer the cleanly-stripped "afterMention" when mention is at start.
+    // For slash dispatch, prefer the cleanly-stripped "afterMention" when mention is at start.
     // Otherwise fall back to stripping all occurrences of the mention from the body.
     let text: string;
     if (mentionAtStart) {
@@ -1027,9 +1046,37 @@ export class MatrixConnector {
       text = text.trim();
     }
 
+    // DMs always bypass the allowed-rooms filter: a 1:1 room is never in
+    // MATRIX_ALLOWED_ROOMS, so without this exemption the bot would never reply
+    // in private. The room filter only gates group rooms — and never an alert:
+    // `/alerte` must work from any room the bot is in. It runs before the
+    // log below, so the messages of other rooms are not written out.
+    if (
+      !isDM &&
+      config.matrix.allowedRooms.length > 0 &&
+      !config.matrix.allowedRooms.includes(roomId) &&
+      !(isSlashCommand && isAlerteCommand(text))
+    ) {
+      console.log(
+        `[Matrix] Ignoring message in ${roomId} (not in MATRIX_ALLOWED_ROOMS)`,
+      );
+      return;
+    }
+
+    console.log(
+      `[Matrix] Message from ${sender} in ${roomId} isDM=${isDM} isMentioned=${isMentioned} mentionAtStart=${mentionAtStart} isSlashCommand=${isSlashCommand} body=${JSON.stringify(body.slice(0, 100))}`,
+    );
+
+    // Loop guard: own messages that are not slash commands (i.e. the bot's own
+    // replies) must never reach the dispatch or the generic notice below.
+    if (isSelf && !isSlashCommand) return;
+
+    if (!isDM && !isMentioned && !isSlashCommand) return;
+
     const userEventId = event.event_id as string;
 
-    // OPS rooms: only `/help` (or `/aide`) and the `/rappels-*` pair work.
+    // OPS rooms: only `/help` (or `/aide`), the `/rappels-*` pair and
+    // `/alerte` (which works everywhere) are handled.
     // `/help` shows the OPS-request help; `/rappels-calendrier` starts the
     // reminder inscription (its whole point is to be typed in « Demande d'OPS »,
     // docs/rappels-calendrier.md §5.1) and `/rappels-stop` ends it — someone who
@@ -1050,6 +1097,8 @@ export class MatrixConnector {
         await this.startRappelsInscription(roomId, sender, userEventId, threadRoot);
       } else if (isSlashCommand && isRappelsStop(text)) {
         await this.handleRappelsStop(roomId, sender, text, userEventId, threadRoot);
+      } else if (isSlashCommand && isAlerteCommand(text)) {
+        await this.handleAlerte(roomId, sender, text, userEventId, threadRoot, isDM);
       }
       return;
     }
@@ -1066,8 +1115,10 @@ export class MatrixConnector {
       // typed in (or that room's parent space), so confining it to the command
       // rooms would leave it able to target only the command rooms themselves.
       // The authorisation boundary is the membership check on the *target*
-      // below, not this room gate.
-      const gateExempt = text.split(/\s+/)[0] === "/invite";
+      // below, not this room gate. `/alerte` is exempt too: anyone must be
+      // able to raise an alert from anywhere, DMs included.
+      const gateExempt =
+        text.split(/\s+/)[0] === "/invite" || isAlerteCommand(text);
       if (
         !dmBypass &&
         !gateExempt &&
@@ -1098,7 +1149,7 @@ export class MatrixConnector {
         text.startsWith("/aide ")
       ) {
         await this.sendReaction(roomId, userEventId, "📖");
-        await this.sendMessage(roomId, buildHelp(), userEventId, threadRoot);
+        await this.sendMessage(roomId, buildHelp(this.botHandle), userEventId, threadRoot);
         record({ user: sender, room: roomId, kind: "slash", text, status: "ok" });
         return;
       }
@@ -1189,6 +1240,7 @@ export class MatrixConnector {
             targetRoomId: result.createdRoomId,
             targetLabel: result.targetLabel ?? "le salon",
             homeserver: config.matrix.homeserver,
+            botHandle: this.botHandle,
           });
           await this.sendMessage(roomId, inv.message, userEventId, threadRoot);
           record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: `salon+startup n8n ${inv.reaction}` });
@@ -1225,7 +1277,7 @@ export class MatrixConnector {
         // `/invite`, `/invite help`, `/invite aide` → help card (no n8n call).
         if (isInviteHelp(text)) {
           await this.sendReaction(roomId, userEventId, "📖");
-          await this.sendMessage(roomId, buildInviteHelp(), userEventId, threadRoot);
+          await this.sendMessage(roomId, buildInviteHelp(this.botHandle), userEventId, threadRoot);
           record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "invite-help" });
           return;
         }
@@ -1323,11 +1375,17 @@ export class MatrixConnector {
           targetRoomId: parsed.simuler ? "" : target.roomId,
           targetLabel: target.label,
           homeserver: config.matrix.homeserver,
+          botHandle: this.botHandle,
         });
         await this.sendReaction(roomId, userEventId, reply.reaction);
         await this.sendMessage(roomId, reply.message, userEventId, threadRoot);
         const status = statutPourReaction(reply.reaction);
         record({ user: sender, room: roomId, kind: "slash", text, status, detail: `n8n ${reply.reaction}` });
+        return;
+      }
+
+      if (isAlerteCommand(text)) {
+        await this.handleAlerte(roomId, sender, text, userEventId, threadRoot, isDM);
         return;
       }
 
@@ -1352,6 +1410,13 @@ export class MatrixConnector {
         threadRoot,
       );
       record({ user: sender, room: roomId, kind: "slash", text, status: "unknown", detail: unknownCmd });
+      return;
+    }
+
+    // Alert being prepared: a non-slash message in the DM where the bot asks
+    // its questions is the next answer.
+    if (isDM && this.alertes.enCours(sender, roomId, Date.now())) {
+      await this.handleAlerteReponse(roomId, sender, text);
       return;
     }
 
@@ -1436,8 +1501,28 @@ export class MatrixConnector {
     }
   }
 
-  private async isDMRoom(roomId: string): Promise<boolean> {
-    return this.dmRooms.has(roomId);
+  // Whether a room is a DM with the bot. The bot's m.direct account data only
+  // knows the DMs it opened or was invited to as such, and it loses some: the
+  // SDK drops a room from it at the first failed lookup, and every instance
+  // of the bot rewrites it. A room holding the bot and one other person is a
+  // DM all the same — without this, a command typed there needs a mention,
+  // and /alerte asks its questions in some other DM. With `verifier`, the
+  // membership of a room seen for the first time is checked: one request per
+  // room, the result kept either way.
+  private async isDMRoom(roomId: string, verifier = false): Promise<boolean> {
+    if (this.dmRooms.has(roomId)) return true;
+    if (!verifier || this.groupRooms.has(roomId)) return false;
+    try {
+      const membres = await this.client.getJoinedRoomMembers(roomId);
+      if (membres.length === 2 && membres.includes(this.ownUserId)) {
+        this.dmRooms.add(roomId);
+        return true;
+      }
+      this.groupRooms.add(roomId);
+    } catch (err) {
+      console.error(`[Matrix] membres de ${roomId} illisibles:`, err);
+    }
+    return false;
   }
 
   // Stop the reminders (docs/rappels-calendrier.md §5.1): drop any in-flight
@@ -1476,6 +1561,171 @@ export class MatrixConnector {
     record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: wasSubscribed ? "rappels-stop" : "rappels-stop not-found" });
   }
 
+  // `/alerte` (commands/alerte.ts): the questions run in a DM — typed in a
+  // room, the command opens one — and the alert room is only created once the
+  // answers are confirmed. Reachable from anywhere and by anyone, as the SSI
+  // procedure lets any community member raise an alert.
+  private async handleAlerte(
+    roomId: string,
+    sender: string,
+    text: string,
+    userEventId: string,
+    threadRoot: string,
+    isDM: boolean,
+  ): Promise<void> {
+    const repondre = async (
+      reaction: string,
+      message: string,
+      status: "ok" | "error",
+      detail: string,
+    ): Promise<void> => {
+      await this.sendReaction(roomId, userEventId, reaction);
+      await this.sendMessage(roomId, message, userEventId, threadRoot);
+      record({ user: sender, room: roomId, kind: "slash", text, status, detail });
+    };
+    const cmd = parseAlerte(text);
+    if (cmd.kind === "aide") {
+      return repondre("📖", buildAlerteHelp(this.botHandle), "ok", "alerte aide");
+    }
+    if (cmd.kind === "erreur") {
+      return repondre("❌", cmd.message, "error", "alerte syntaxe");
+    }
+    if (cmd.kind === "annuler") {
+      return this.alertes.annuler(sender)
+        ? repondre("🛑", "🛑 Alerte annulée : rien n'a été créé.", "ok", "alerte annulée")
+        : repondre("ℹ️", "ℹ️ Aucune alerte en préparation.", "ok", "alerte rien à annuler");
+    }
+    const now = new Date();
+    // Already open today for this component: no questions, just join it.
+    const existant = cmd.composant
+      ? alerteOuverte(this.salonsCrees, cmd.composant, now)
+      : undefined;
+    if (cmd.composant && existant) {
+      const res = await rejoindreAlerte(
+        { client: this.client, lanceur: sender, botUserId: this.ownUserId },
+        existant,
+        cmd.composant,
+        now,
+      );
+      return repondre(res.reaction, res.message, "ok", res.detail);
+    }
+    // The questions run in a DM: the one the command was typed in, or a new one.
+    let dm = roomId;
+    if (!isDM) {
+      try {
+        dm = await this.client.dms.getOrCreateDm(sender);
+      } catch (err) {
+        console.error("[Matrix] /alerte: DM creation failed:", err);
+        return repondre(
+          "⚠️",
+          "⚠️ Impossible d'ouvrir un message privé avec toi : accepte l'invitation du bot, puis réessaie. En cas d'urgence, préviens ~Domaine-secu directement.",
+          "error",
+          "alerte dm-create-failed",
+        );
+      }
+      this.dmRooms.add(dm);
+    }
+    // One conversation at a time with the bot: the alert takes over.
+    this.pendingRappels.clear(sender);
+    await this.sendMessage(
+      dm,
+      this.alertes.demarrer(sender, dm, now.getTime(), cmd.composant),
+    );
+    if (dm !== roomId) {
+      return repondre("📨", "📨 Je t'écris en MP pour préparer l'alerte.", "ok", "alerte questions en MP");
+    }
+    await this.sendReaction(roomId, userEventId, "🚨");
+    record({ user: sender, room: roomId, kind: "slash", text, status: "ok", detail: "alerte questions" });
+  }
+
+  // An answer in the DM where an alert is being prepared. The answers
+  // themselves stay out of the history: they describe an unpatched flaw.
+  private async handleAlerteReponse(
+    dm: string,
+    sender: string,
+    text: string,
+  ): Promise<void> {
+    const now = new Date();
+    const noter = (status: "ok" | "error", detail: string): void =>
+      record({ user: sender, room: dm, kind: "dm", text: "alerte", status, detail });
+    const suite = this.alertes.repondre(sender, text, now.getTime());
+    switch (suite.kind) {
+      case "question":
+        await this.sendMessage(dm, suite.message);
+        return;
+      case "annulee":
+        await this.sendMessage(dm, "🛑 Alerte annulée : rien n'a été créé.");
+        noter("ok", "alerte annulée");
+        return;
+      case "composant": {
+        const existant = alerteOuverte(this.salonsCrees, suite.composant, now);
+        if (!existant) {
+          await this.sendMessage(dm, suite.message);
+          return;
+        }
+        this.alertes.annuler(sender);
+        const res = await rejoindreAlerte(
+          { client: this.client, lanceur: sender, botUserId: this.ownUserId },
+          existant,
+          suite.composant,
+          now,
+        );
+        await this.sendMessage(dm, res.message);
+        noter("ok", res.detail);
+        return;
+      }
+      case "recap":
+        await this.sendMessage(
+          dm,
+          recapAlerte({
+            infos: suite.infos,
+            lanceur: sender,
+            now,
+            nbReferents: referentsAInviter(
+              config.alerte.referents,
+              sender,
+              this.ownUserId,
+            ).length,
+            annonce: await libelleAnnonce(this.client, config.alerte.room),
+          }),
+        );
+        return;
+      case "lancer": {
+        const res = await lancerAlerteSecu({
+          client: this.client,
+          post: (r, markdown, mentions) => this.postOrThrow(r, markdown, mentions),
+          salons: this.salonsCrees,
+          botUserId: this.ownUserId,
+          lanceur: sender,
+          infos: suite.infos,
+          now,
+          referents: config.alerte.referents,
+          annonceRoomId: config.alerte.room,
+        });
+        await this.sendMessage(dm, res.message);
+        noter(res.reaction === "❌" ? "error" : "ok", res.detail);
+        return;
+      }
+    }
+  }
+
+  // Post a standalone message and let a failure surface, for the messages
+  // whose delivery has to be reported (the alert). `mentions` fills
+  // m.mentions: under intentional mentions, that is what notifies.
+  private async postOrThrow(
+    roomId: string,
+    text: string,
+    mentions: Mentions,
+  ): Promise<void> {
+    await this.client.sendEvent(roomId, "m.room.message", {
+      msgtype: "m.text",
+      body: text,
+      format: "org.matrix.custom.html",
+      formatted_body: await marked(text),
+      "m.mentions": mentions,
+    });
+  }
+
   // Start the reminder inscription (docs/rappels-calendrier.md §5.1): open a DM
   // with the requester, ask for their CalDAV URL, and remember we're waiting
   // for their reply in that DM.
@@ -1502,6 +1752,8 @@ export class MatrixConnector {
     }
     this.dmRooms.add(dmRoomId);
     this.pendingRappels.start(sender, dmRoomId, Date.now());
+    // One conversation at a time with the bot: this one takes over.
+    this.alertes.annuler(sender);
     await this.sendMessage(
       dmRoomId,
       buildWelcomeMessage(config.caldav.helpUrl, config.caldav.user ?? "le compte du bot"),
