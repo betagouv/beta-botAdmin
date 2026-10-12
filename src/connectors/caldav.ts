@@ -42,6 +42,8 @@ export interface CalDavResult {
   status: number;
   events: CalEvent[];
   error?: string;
+  // The URL fails the rule of checkCalendarUrl: nothing was sent.
+  refused?: boolean;
 }
 
 // A 2xx multistatus (207) or plain 200/201 is a success. Bug already hit in
@@ -89,55 +91,225 @@ function calendarQueryBody(start: Date, end: Date): string {
 </c:calendar-query>`;
 }
 
-// Test that a calendar URL is reachable with the service credentials, without
-// pulling events. A lightweight PROPFIND Depth 0. Any 2xx (200/207, and 201 —
-// the doc flagged 201 being wrongly rejected) counts as success.
-export async function testAccess(
-  url: string,
-): Promise<{ ok: boolean; status: number; error?: string }> {
-  // 1. iCal feed / share link: a GET returning an iCalendar body is a success.
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      headers: basicAuthHeader() ? { Authorization: basicAuthHeader()! } : {},
-    });
-    const text = await res.text();
-    if (isCalDavOk(res.status) && text.includes("BEGIN:VCALENDAR")) {
-      return { ok: true, status: res.status };
-    }
-  } catch {
-    // fall through to CalDAV probe
-  }
+// ─── Where the service credentials may go ────────────────────────────────────
+//
+// The calendar URL is typed by the user. Every request carrying the service
+// account's Basic auth goes through `davRequest`, which refuses any URL that is
+// not https on an allowed La Suite host, on the default port, without userinfo,
+// under /dav/. Redirects are never followed: a 3xx could point anywhere.
 
-  // 2. CalDAV collection: a PROPFIND Depth 0 with the service credentials.
-  const auth = basicAuthHeader();
-  if (!auth) {
-    return {
-      ok: false,
-      status: 0,
-      error:
-        "URL non lisible en flux iCal, et CalDAV non configuré (CALDAV_USER / CALDAV_PASSWORD manquants)",
-    };
-  }
-  let res: Response;
+// A user's calendar collection on La Suite (Open-Xchange): /dav/caldav/<id>,
+// with or without the final slash. The id must be there: the bare prefix, or a
+// stray character after it (a backtick quoted from the bot's own message), is
+// not a calendar.
+const CALENDAR_PATH_RE = /^\/dav\/caldav\/[A-Za-z0-9._~=+-]+\/?$/;
+// Principals (/dav/principals/…) live next to the calendars.
+const DAV_PATH_PREFIX = "/dav/";
+const DAV_TIMEOUT_MS = 20_000;
+const DAV_MAX_BYTES = 5 * 1024 * 1024;
+
+// May the service credentials be sent to this URL? Checked on the parsed URL,
+// after normalisation (case, punycode, `..`, backslashes), never on the string.
+export function isAllowedDavUrl(url: URL): boolean {
+  return (
+    url.protocol === "https:" &&
+    url.username === "" &&
+    url.password === "" &&
+    url.port === "" &&
+    config.caldav.allowedHosts.includes(url.hostname) &&
+    url.pathname.startsWith(DAV_PATH_PREFIX)
+  );
+}
+
+export type CalendarUrlCheck =
+  | { ok: true; url: string }
+  | { ok: false; reason: string };
+
+// A calendar URL as the user may give it: a La Suite CalDAV collection.
+export function checkCalendarUrl(raw: string): CalendarUrlCheck {
+  let url: URL;
   try {
-    res = await fetch(url, {
-      method: "PROPFIND",
-      headers: {
-        Authorization: auth,
-        Depth: "0",
-        "Content-Type": "application/xml; charset=utf-8",
-      },
-      body: `<?xml version="1.0" encoding="utf-8" ?>
+    url = new URL(raw);
+  } catch {
+    return { ok: false, reason: "URL illisible" };
+  }
+  if (!isAllowedDavUrl(url) || !CALENDAR_PATH_RE.test(url.pathname)) {
+    return { ok: false, reason: "pas une URL CalDAV La Suite" };
+  }
+  url.hash = "";
+  return { ok: true, url: url.href };
+}
+
+// Read a response body, giving up past `max` bytes: a hostile or broken
+// server must not make the bot buffer an endless body.
+async function readCapped(res: Response, max: number): Promise<string> {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`réponse CalDAV de plus de ${max} octets`);
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
+export interface DavResponse {
+  status: number;
+  text: string;
+}
+
+// The only way the service credentials leave the bot. Throws when the URL is
+// not allowed, before anything is sent, or on a network error / timeout.
+export async function davRequest(
+  rawUrl: string,
+  method: "PROPFIND" | "REPORT",
+  depth: "0" | "1",
+  body: string,
+): Promise<DavResponse> {
+  const url = new URL(rawUrl);
+  if (!isAllowedDavUrl(url)) {
+    throw new Error(`URL CalDAV refusée : ${url.protocol}//${url.host}`);
+  }
+  const auth = basicAuthHeader();
+  if (!auth) throw new Error("CalDAV non configuré (CALDAV_USER / CALDAV_PASSWORD)");
+  const res = await fetch(url, {
+    method,
+    redirect: "manual",
+    signal: AbortSignal.timeout(DAV_TIMEOUT_MS),
+    headers: {
+      Authorization: auth,
+      Depth: depth,
+      "Content-Type": "application/xml; charset=utf-8",
+    },
+    body,
+  });
+  return { status: res.status, text: await readCapped(res, DAV_MAX_BYTES) };
+}
+
+// Test that a calendar URL is reachable with the service credentials, without
+// pulling events: a PROPFIND Depth 0. Any 2xx (200/207, and 201 — the doc
+// flagged 201 being wrongly rejected) counts as success.
+export async function testAccess(
+  rawUrl: string,
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  const check = checkCalendarUrl(rawUrl);
+  if (!check.ok) return { ok: false, status: 0, error: check.reason };
+  try {
+    const res = await davRequest(
+      check.url,
+      "PROPFIND",
+      "0",
+      `<?xml version="1.0" encoding="utf-8" ?>
 <d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype /><d:displayname /></d:prop></d:propfind>`,
-    });
+    );
+    if (isCalDavOk(res.status)) return { ok: true, status: res.status };
+    return { ok: false, status: res.status, error: res.text.slice(0, 300) };
   } catch (e) {
     return { ok: false, status: 0, error: String(e) };
   }
-  if (isCalDavOk(res.status)) return { ok: true, status: res.status };
-  const text = await res.text().catch(() => "");
-  return { ok: false, status: res.status, error: text.slice(0, 300) };
+}
+
+// ─── Who owns a calendar ─────────────────────────────────────────────────────
+//
+// La Suite answers 404 to DAV:owner. What it does expose, on a calendar shared
+// with the bot, is the calendarserver.org `invite` property: its `organizer`
+// is the owner's principal (written `mailto:/dav/principals/users/<n>`), and
+// that principal lists the owner's addresses in `calendar-user-address-set`.
+
+// The owner's principal href from a PROPFIND `cs:invite` answer, if any.
+export function parseOrganizerHref(xml: string): string | null {
+  // Only inside <organizer>…</organizer>: an empty organizer must not borrow
+  // the href of a sharee listed after it.
+  const inner = xml.match(
+    /<(?:[\w-]+:)?organizer\b[^>]*(?<!\/)>([\s\S]*?)<\/(?:[\w-]+:)?organizer>/,
+  )?.[1];
+  const m = inner?.match(/<(?:[\w-]+:)?href\b[^>]*>([^<]+)<\/(?:[\w-]+:)?href>/);
+  return m ? decodeXmlEntities(m[1]!.trim()) : null;
+}
+
+// Every mailto: address in a PROPFIND `calendar-user-address-set` answer.
+export function parseAddressSet(xml: string): string[] {
+  const set = xml.match(
+    /<(?:[\w-]+:)?calendar-user-address-set\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?calendar-user-address-set>/,
+  )?.[1];
+  if (!set) return [];
+  const out: string[] = [];
+  for (const m of set.matchAll(/<(?:[\w-]+:)?href\b[^>]*>\s*mailto:([^<\s]+)\s*</gi)) {
+    const email = decodeXmlEntities(m[1]!).toLowerCase();
+    if (/^[^@\s]+@[^@\s]+$/.test(email)) out.push(email);
+  }
+  return [...new Set(out)];
+}
+
+// Addresses of the calendar's owner, lowercased. Empty when the server does
+// not say who owns it — the caller must then treat the owner as unknown.
+export async function calendarOwnerEmails(rawUrl: string): Promise<string[]> {
+  const check = checkCalendarUrl(rawUrl);
+  if (!check.ok) return [];
+  try {
+    const cal = await davRequest(
+      check.url,
+      "PROPFIND",
+      "0",
+      `<?xml version="1.0" encoding="utf-8" ?>
+<d:propfind xmlns:d="DAV:" xmlns:cs="http://calendarserver.org/ns/"><d:prop><cs:invite /></d:prop></d:propfind>`,
+    );
+    if (!isCalDavOk(cal.status)) return [];
+    const href = parseOrganizerHref(cal.text);
+    if (!href) return [];
+    // A plain address: no principal to look up.
+    const direct = href.match(/^mailto:([^@\s/]+@[^@\s]+)$/i)?.[1];
+    if (direct) return [direct.toLowerCase()];
+    // `mailto:/dav/principals/…` is how La Suite writes a principal path. It
+    // is resolved against the calendar URL, and davRequest re-checks the
+    // result, so an absolute href to another host goes nowhere.
+    const principal = new URL(href.replace(/^mailto:(?=\/)/i, ""), check.url);
+    const pr = await davRequest(
+      principal.href,
+      "PROPFIND",
+      "0",
+      `<?xml version="1.0" encoding="utf-8" ?>
+<d:propfind xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav"><d:prop><c:calendar-user-address-set /></d:prop></d:propfind>`,
+    );
+    return isCalDavOk(pr.status) ? parseAddressSet(pr.text) : [];
+  } catch (e) {
+    console.warn("[caldav] propriétaire illisible :", String(e));
+    return [];
+  }
+}
+
+// Does this Tchap account own one of these addresses? A Tchap ID is the email
+// with `@` turned into `-` (@prenom.nom-beta.gouv.fr:agent…), so the address is
+// transformed and compared whole — never split back, which `-` makes ambiguous.
+export function ownsCalendar(matrixUserId: string, ownerEmails: string[]): boolean {
+  const localpart = matrixUserId.match(/^@([^:]+):/)?.[1]?.toLowerCase();
+  if (!localpart) return false;
+  return ownerEmails.some((e) => e.toLowerCase().replace("@", "-") === localpart);
+}
+
+// The proof of ownership asked when the addresses don't match: an event whose
+// title carries `code`, created in the calendar. It only counts when nobody
+// outside the owner's addresses takes part in it — otherwise anyone could put
+// the code there by sending the owner an invitation titled with it.
+export function hasProofEvent(
+  events: CalEvent[],
+  code: string,
+  ownerEmails: string[],
+): boolean {
+  const owners = new Set(ownerEmails.map((e) => e.toLowerCase()));
+  const needle = code.toLowerCase();
+  return events.some((e) => {
+    if (!e.summary.toLowerCase().includes(needle)) return false;
+    const people = [e.organizer, ...e.attendees].filter((p) => p !== "");
+    return people.every((p) => owners.has(p.toLowerCase()));
+  });
 }
 
 // Keep events whose start instant falls within [start, end).
@@ -151,73 +323,34 @@ function filterByWindow(events: CalEvent[], start: Date, end: Date): CalEvent[] 
   });
 }
 
-// Fetch events overlapping [start, end] from a calendar URL. Two shapes are
-// supported, tried in order:
-//   1. An iCal feed / OX share link (GET → text/calendar with the whole
-//      VCALENDAR). No auth needed — this is what "Partage → lien public" gives.
-//      We parse the full feed and filter the window client-side.
-//   2. A true CalDAV collection (REPORT calendar-query, Basic auth), used as a
-//      fallback when the GET doesn't return an iCalendar body.
+// Fetch events overlapping [start, end] from a CalDAV collection (REPORT
+// calendar-query with Basic auth). `refused` marks a URL the credentials may
+// not be sent to, e.g. a row stored before the URL rule existed: the link is
+// then as good as broken.
 export async function fetchEvents(
-  url: string,
+  rawUrl: string,
   start: Date,
   end: Date,
 ): Promise<CalDavResult> {
-  // 1. Try the plain GET iCal feed first (share links, webcal exports).
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      // Send Basic auth if configured — harmless for anonymous share links,
-      // required for an authenticated iCal export.
-      headers: basicAuthHeader() ? { Authorization: basicAuthHeader()! } : {},
-    });
-    const text = await res.text();
-    if (isCalDavOk(res.status) && text.includes("BEGIN:VCALENDAR")) {
-      const events = filterByWindow(parseVEvents(text), start, end);
-      return { ok: true, status: res.status, events };
-    }
-    // A 2xx that isn't iCal (e.g. an HTML page) means this isn't a feed — fall
-    // through to the CalDAV path below.
-  } catch {
-    // Network error on GET — try CalDAV before giving up.
+  const check = checkCalendarUrl(rawUrl);
+  if (!check.ok) {
+    return { ok: false, status: 0, events: [], error: check.reason, refused: true };
   }
-
-  // 2. Fall back to a CalDAV REPORT calendar-query (needs Basic auth).
-  const auth = basicAuthHeader();
-  if (!auth) {
-    return {
-      ok: false,
-      status: 0,
-      events: [],
-      error:
-        "URL non lisible en flux iCal, et CalDAV non configuré (CALDAV_USER / CALDAV_PASSWORD manquants)",
-    };
-  }
-  let res: Response;
+  let res: DavResponse;
   try {
-    res = await fetch(url, {
-      method: "REPORT",
-      headers: {
-        Authorization: auth,
-        "Content-Type": "application/xml; charset=utf-8",
-        Depth: "1",
-      },
-      body: calendarQueryBody(start, end),
-    });
+    res = await davRequest(check.url, "REPORT", "1", calendarQueryBody(start, end));
   } catch (e) {
     return { ok: false, status: 0, events: [], error: String(e) };
   }
-  const text = await res.text();
   if (!isCalDavOk(res.status)) {
     return {
       ok: false,
       status: res.status,
       events: [],
-      error: text.slice(0, 500),
+      error: res.text.slice(0, 500),
     };
   }
-  const events = filterByWindow(parseMultistatus(text), start, end);
+  const events = filterByWindow(parseMultistatus(res.text), start, end);
   return { ok: true, status: res.status, events };
 }
 

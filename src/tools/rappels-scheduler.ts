@@ -1,4 +1,8 @@
-import { fetchEvents } from "../connectors/caldav.js";
+import {
+  fetchEvents,
+  calendarOwnerEmails,
+  ownsCalendar,
+} from "../connectors/caldav.js";
 import {
   buildReminderMessage,
   buildLinkBrokenMessage,
@@ -58,7 +62,9 @@ export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
   for (const ins of inscriptions) {
     const res = await fetchEvents(ins.calDavUrl, windowStart, windowEnd);
     if (!res.ok) {
-      if (BROKEN_STATUSES.has(res.status)) {
+      // `refused`: a stored URL the credentials may not be sent to (saved
+      // before the URL rule existed) — as broken as a revoked share.
+      if (res.refused || BROKEN_STATUSES.has(res.status)) {
         result.broken++;
         await handleBrokenLink(ins, res.status, deps);
       } else {
@@ -94,6 +100,34 @@ export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
   }
 
   return result;
+}
+
+// Active inscriptions whose calendar La Suite attaches to another account
+// than the subscriber's. The owner check only runs at inscription time: this
+// catches rows stored before it existed. `illisibles`: the owner could not be
+// read (La Suite down, timeout, no organizer) — not evidence of anything, so
+// kept apart. Read-only — an admin decides.
+export async function findForeignInscriptions(): Promise<{
+  etrangeres: Inscription[];
+  illisibles: Inscription[];
+}> {
+  const etrangeres: Inscription[] = [];
+  const illisibles: Inscription[] = [];
+  for (const ins of await listActiveInscriptions()) {
+    const owners = await calendarOwnerEmails(ins.calDavUrl);
+    if (owners.length === 0) illisibles.push(ins);
+    else if (!ownsCalendar(ins.matrixUserId, owners)) etrangeres.push(ins);
+  }
+  return { etrangeres, illisibles };
+}
+
+export function buildForeignInscriptionsNotice(users: string[]): string {
+  return [
+    `🔎 Rappels : ${users.length} inscription(s) active(s) dont l'agenda n'est pas rattaché au compte Tchap :`,
+    ...users.map((u) => `- ${u}`),
+    "",
+    "Si la personne est bien la propriétaire (même nom, autre domaine), rien à faire : tu ne seras plus prévenu pour elle. Sinon, passe sa ligne en « désactivé » dans Grist : elle reçoit les réunions de quelqu'un d'autre.",
+  ].join("\n");
 }
 
 async function handleBrokenLink(
