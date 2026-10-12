@@ -56,6 +56,16 @@ test("inactivite: a room with a message under 60 days ago is left alone", async 
   assert.deepEqual(f.warned, []);
 });
 
+test("inactivite: an /alerte room is never warned nor closed, however silent", async () => {
+  const alerte = salon({ name: "tmp-alerte-securite-log4j-120826", avertiLe: NOW - 30 * DAY });
+  const f = fake([alerte], null);
+  const res = await runInactivityTick(f.deps);
+  assert.equal(res.salons, 0);
+  assert.deepEqual(f.sent, []);
+  assert.deepEqual(f.closed, []);
+  assert.deepEqual(f.warned, []);
+});
+
 test("inactivite: after 60 days without a message the room is warned, with the deadline", async () => {
   const f = fake([salon()], Date.parse("2026-08-01T10:00:00Z"));
   const res = await runInactivityTick(f.deps);

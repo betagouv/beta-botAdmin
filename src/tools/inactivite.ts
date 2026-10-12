@@ -1,10 +1,12 @@
 import type { MatrixClient } from "matrix-bot-sdk";
 import type { CreatedRoom } from "../commands/created-rooms.js";
+import { PREFIXE_SALON_ALERTE } from "../commands/alerte.js";
 
 // Inactive-room sweep. The bot watches the rooms it created
 // (data/created-rooms.json): after `inactiveDays` without a human message it
 // warns the room, and if nobody writes within `graceDays` it closes it the way
-// `/salon delete` does (detach, kick, leave).
+// `/salon delete` does (detach, kick, leave). The `/alerte` rooms are listed
+// there too but left out: an alert room is closed by the people handling it.
 //
 // IO is injected so a tick can be exercised against fakes in tests and run
 // read-only (dryRun) against live data without warning or closing anything.
@@ -63,15 +65,18 @@ export async function runInactivityTick(
   }
   const inactiveMs = deps.inactiveDays * DAY_MS;
   const graceMs = deps.graceDays * DAY_MS;
+  const rooms = deps.rooms.filter(
+    (r) => !r.name.startsWith(PREFIXE_SALON_ALERTE),
+  );
   const result: InactiviteResult = {
-    salons: deps.rooms.length,
+    salons: rooms.length,
     avertis: 0,
     fermes: 0,
     repris: 0,
     erreurs: 0,
   };
 
-  for (const room of deps.rooms) {
+  for (const room of rooms) {
     const label = `${room.name} (${room.roomId})`;
     let last: number | null;
     try {
