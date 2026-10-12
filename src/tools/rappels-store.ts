@@ -165,7 +165,7 @@ export async function markReminderSent(input: {
 }
 
 // Purge sent-reminder rows older than `olderThanMs` (doc §4: purge > 24h). The
-// scheduler calls this occasionally to keep the table small.
+// scheduler calls this at the end of every tick to keep the table small.
 export async function purgeOldSent(
   now: number,
   olderThanMs: number,
