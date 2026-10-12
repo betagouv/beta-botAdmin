@@ -740,6 +740,15 @@ async function createSpace(
         state_key: parentSpaceId,
         content: { via: [parentVia], canonical: true },
       },
+      // Tchap's « Aperçu de l'espace » toggle: someone invited (or browsing
+      // the parent) sees the space, its members and its rooms before joining.
+      // Joining a private space still takes an invite. A moderator can switch
+      // it off in the space settings (history visibility is delegated to 50).
+      {
+        type: "m.room.history_visibility",
+        state_key: "",
+        content: { history_visibility: "world_readable" },
+      },
     ],
   });
 
@@ -757,7 +766,7 @@ async function createSpace(
     reaction: "✅",
     // The space name is a clickable pill; the raw ID is kept because
     // `/invite --espace <id>` needs it (a space has no composer to read it from).
-    message: `🌌 Espace ${roomLink(spaceId, `**${name}**`)} créé (${encrypted ? "privé" : "public"}) et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID (pour \`/invite --espace\`) : \`${spaceId}\`${rightsLine("espace", rightsOk)}`,
+    message: `🌌 Espace ${roomLink(spaceId, `**${name}**`)} créé (${encrypted ? "privé" : "public"}, aperçu ouvert avant de rejoindre) et rattaché à ${where}.\nTu peux y créer des salons : \`/salon create <nom> ${name}\`\nID (pour \`/invite --espace\`) : \`${spaceId}\`${rightsLine("espace", rightsOk)}`,
   };
 }
 
@@ -985,7 +994,7 @@ function spacesHelpMessage(): RoomCmdResult {
 |---|---|
 | \`/espace list\` | Liste les sous-espaces de l'espace géré |
 | \`/espace list <espace>\` | Liste les sous-espaces d'un sous-espace (nom ou ID, à n'importe quelle profondeur) |
-| \`/espace create <nom>\` | Crée un sous-espace (**privé**) et le rattache à l'espace géré |
+| \`/espace create <nom>\` | Crée un sous-espace (**privé**, avec **aperçu** : on voit l'espace et ses salons avant de le rejoindre) et le rattache à l'espace géré |
 | \`/espace create <nom> --clair\` | Idem mais **public** (découvrable). Un espace ne portant pas de messages, \`--clair\` n'agit que sur la visibilité |
 | \`/espace create <nom> <espace-parent>\` | Crée un sous-espace **imbriqué** dans **<espace-parent>** (nom ou ID). Nom avec des espaces : entre guillemets — \`/espace create <nom> "Pole Tech"\` |
 | \`/espace delete <nom>\` | Supprime un sous-espace **vide** (réservé à un utilisateur autorisé, en MP) |
