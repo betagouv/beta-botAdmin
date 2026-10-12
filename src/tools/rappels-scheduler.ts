@@ -7,6 +7,7 @@ import {
   listActiveInscriptions,
   reminderAlreadySent,
   markReminderSent,
+  purgeOldSent,
   setStatut,
   type Inscription,
 } from "./rappels-store.js";
@@ -36,11 +37,18 @@ export interface TickResult {
   events: number;
   sent: number;
   broken: number;
+  // Rows dropped from the anti-duplicate log this tick.
+  purged: number;
 }
 
 // HTTP statuses that mean the link/credentials are permanently broken (vs. a
 // transient 5xx we should retry next tick).
 const BROKEN_STATUSES = new Set([401, 403, 404, 410]);
+
+// Age past which an anti-duplicate row is dropped (docs §4: purge > 24h). A
+// row only matters while its event can still fall in the lead window, which is
+// minutes after the reminder went out; a day later it can never re-arm one.
+const PURGE_AFTER_MS = 24 * 60 * 60 * 1000;
 
 export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
   const { now, leadMin, windowMin, dryRun, send } = deps;
@@ -53,6 +61,7 @@ export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
     events: 0,
     sent: 0,
     broken: 0,
+    purged: 0,
   };
 
   for (const ins of inscriptions) {
@@ -90,6 +99,16 @@ export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
         envoyeLe: now,
       });
       result.sent++;
+    }
+  }
+
+  // Housekeeping comes last, so a Grist failure here never costs a reminder.
+  // Skipped in dry run, which promises not to write anything.
+  if (!dryRun) {
+    try {
+      result.purged = await purgeOldSent(now.getTime(), PURGE_AFTER_MS);
+    } catch (e) {
+      console.error("[rappels] purge de RappelsEnvoyes échouée:", e);
     }
   }
 

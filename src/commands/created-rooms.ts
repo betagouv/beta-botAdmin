@@ -2,7 +2,9 @@ import fs from "fs";
 import path from "path";
 import { config } from "../config.js";
 
-// Persistent list of rooms created by the bot via `/salon create`.
+// Persistent list of rooms created by the bot (`/salon create`,
+// `/alerte`), kept in data/created-rooms.json. `/alerte` reads it
+// back to spot an alert raised twice for the same component the same day.
 export interface CreatedRoom {
   roomId: string;
   name: string;
@@ -36,16 +38,19 @@ function save(): void {
   }
 }
 
-export function listCreatedRooms(): CreatedRoom[] {
-  return [...load()];
-}
-
 export function addCreatedRoom(roomId: string, name: string): void {
   const all = load();
   if (all.some((r) => r.roomId === roomId)) return;
   all.push({ roomId, name, createdTs: Date.now() });
   cache = all;
   save();
+}
+
+// The most recent room the bot created under exactly this name, if any.
+export function findCreatedRoom(name: string): string | undefined {
+  return load()
+    .filter((r) => r.name === name)
+    .sort((a, b) => b.createdTs - a.createdTs)[0]?.roomId;
 }
 
 export function removeCreatedRoom(roomId: string): void {
