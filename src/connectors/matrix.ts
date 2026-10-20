@@ -549,38 +549,43 @@ export class MatrixConnector {
     console.log(
       `[inactivite] actif: avertissement après ${cfg.jours} j sans message, fermeture ${cfg.delaiJours} j plus tard, dryRun=${cfg.dryRun}`,
     );
-    const tick = async (): Promise<void> => {
-      try {
-        const res = await runInactivityTick({
-          now: Date.now(),
-          inactiveDays: cfg.jours,
-          graceDays: cfg.delaiJours,
-          dryRun: cfg.dryRun,
-          rooms: listCreatedRooms(),
-          lastHumanMessage: (roomId) =>
-            lastHumanMessageTs(this.client, roomId, this.ownUserId),
-          send: (roomId, text) => this.sendRoomMessage(roomId, text),
-          close: async (roomId) =>
-            detachAndClose(
-              this.client,
-              (await parentSpace(this.client, roomId)) ??
-                config.matrix.managedSpace,
-              roomId,
-              this.ownUserId,
-              "Salon fermé pour inactivité",
-            ),
-          setWarned: setAvertiLe,
-          notifyAdmin: (text) => this.notifyAdmin(text),
-        });
-        console.log(
-          `[inactivite] tick${cfg.dryRun ? " (dry run)" : ""}: ${res.salons} salon(s), ${res.avertis} averti(s), ${res.fermes} fermé(s), ${res.repris} repris, ${res.erreurs} erreur(s)`,
-        );
-      } catch (err) {
-        console.error("[inactivite] tick error:", err);
-      }
-    };
-    setTimeout(() => void tick(), 60_000);
-    this.inactivityTimer = setInterval(() => void tick(), 6 * 3_600_000);
+    setTimeout(() => void this.inactivityTick(), 60_000);
+    this.inactivityTimer = setInterval(() => void this.inactivityTick(), 6 * 3_600_000);
+  }
+
+  private async inactivityTick(): Promise<void> {
+    const cfg = config.inactivite;
+    try {
+      const res = await runInactivityTick({
+        now: Date.now(),
+        inactiveDays: cfg.jours,
+        graceDays: cfg.delaiJours,
+        dryRun: cfg.dryRun,
+        rooms: listCreatedRooms(),
+        lastHumanMessage: (roomId) =>
+          lastHumanMessageTs(this.client, roomId, this.ownUserId),
+        // The warning only counts once it is in the room. sendMessage logs a
+        // refused post and returns as if it went through: the room would then
+        // be closed two weeks later with nobody ever warned.
+        send: (roomId, text) => this.postOrThrow(roomId, text, {}),
+        close: async (roomId) =>
+          detachAndClose(
+            this.client,
+            (await parentSpace(this.client, roomId)) ??
+              config.matrix.managedSpace,
+            roomId,
+            this.ownUserId,
+            "Salon fermé pour inactivité",
+          ),
+        setWarned: setAvertiLe,
+        notifyAdmin: (text) => this.notifyAdmin(text),
+      });
+      console.log(
+        `[inactivite] tick${cfg.dryRun ? " (dry run)" : ""}: ${res.salons} salon(s), ${res.avertis} averti(s), ${res.fermes} fermé(s), ${res.repris} repris, ${res.erreurs} erreur(s)`,
+      );
+    } catch (err) {
+      console.error("[inactivite] tick error:", err);
+    }
   }
 
   // Intercept verification to-device events before the Rust engine processes them
@@ -1755,8 +1760,9 @@ export class MatrixConnector {
   }
 
   // Post a standalone message and let a failure surface, for the messages
-  // whose delivery has to be reported (the alert). `mentions` fills
-  // m.mentions: under intentional mentions, that is what notifies.
+  // whose delivery has to be reported (the alert, the inactivity warning).
+  // `mentions` fills m.mentions: under intentional mentions, that is what
+  // notifies.
   private async postOrThrow(
     roomId: string,
     text: string,
