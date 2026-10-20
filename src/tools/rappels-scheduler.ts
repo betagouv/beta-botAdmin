@@ -18,7 +18,8 @@ import {
 
 // Reminder scheduler (docs/rappels-calendrier.md §5.2, "Workflow B"). One tick
 // scans every active inscription, finds events starting inside the lead window,
-// and DMs a reminder — exactly once per (user, event, start).
+// and DMs a reminder — exactly once per (user, event, start). A reminder the
+// homeserver refuses is tried again on the next ticks until the meeting starts.
 //
 // IO is injected so a tick can be exercised against fakes in tests and run
 // read-only (dryRun) against live data without sending anything.
@@ -30,16 +31,24 @@ export interface TickDeps {
   dryRun: boolean;
   // Contact shown in error messages.
   contact?: string;
-  // Send a message to a room (the user's DM room, or an admin room).
+  // Send a message to a room (the user's DM room, or an admin room). Rejects
+  // when the message was not posted.
   send: (roomId: string, text: string) => Promise<void>;
   // Optional: notify the admin when a user's calendar breaks.
   notifyAdmin?: (text: string) => Promise<void>;
+  // Reminders the homeserver refused (reminderKey → start of the meeting, in
+  // ms). The caller keeps the map from one tick to the next: the window has
+  // moved past those meetings, so each tick looks for them again until they
+  // start. Without it a refused reminder is only logged.
+  retry?: Map<string, number>;
 }
 
 export interface TickResult {
   inscriptions: number;
   events: number;
   sent: number;
+  // Reminders the homeserver refused this tick.
+  failed: number;
   broken: number;
   // Rows dropped from the anti-duplicate log this tick.
   purged: number;
@@ -54,22 +63,38 @@ const BROKEN_STATUSES = new Set([401, 403, 404, 410]);
 // minutes after the reminder went out; a day later it can never re-arm one.
 const PURGE_AFTER_MS = 24 * 60 * 60 * 1000;
 
+// One reminder, keyed like the anti-duplicate log: a recurring event reuses
+// its UID, the start tells the occurrences apart.
+function reminderKey(matrixUserId: string, uid: string, start: Date): string {
+  return `${matrixUserId} ${uid} ${start.toISOString()}`;
+}
+
 export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
-  const { now, leadMin, windowMin, dryRun, send } = deps;
+  const { now, leadMin, windowMin, dryRun, send, retry } = deps;
   const windowStart = new Date(now.getTime() + (leadMin - windowMin) * 60_000);
   const windowEnd = new Date(now.getTime() + leadMin * 60_000);
+  // Calendars are read from now on, not only over the window: a reminder
+  // refused on an earlier tick sits before the window by now.
+  const readFrom = new Date(Math.min(now.getTime(), windowStart.getTime()));
+
+  for (const [key, start] of retry ?? []) {
+    if (start > now.getTime()) continue;
+    retry?.delete(key);
+    console.warn(`[rappels] rappel jamais parti, la réunion a commencé : ${key}`);
+  }
 
   const inscriptions = await listActiveInscriptions();
   const result: TickResult = {
     inscriptions: inscriptions.length,
     events: 0,
     sent: 0,
+    failed: 0,
     broken: 0,
     purged: 0,
   };
 
   for (const ins of inscriptions) {
-    const res = await fetchEvents(ins.calDavUrl, windowStart, windowEnd);
+    const res = await fetchEvents(ins.calDavUrl, readFrom, windowEnd);
     if (!res.ok) {
       // `refused`: a stored URL the credentials may not be sent to (saved
       // before the URL rule existed) — as broken as a revoked share.
@@ -86,10 +111,20 @@ export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
 
     for (const ev of res.events) {
       if (!ev.start) continue;
+      const key = reminderKey(ins.matrixUserId, ev.uid, ev.start);
+      const retrying = retry?.has(key) ?? false;
+      if (ev.start.getTime() < windowStart.getTime() && !retrying) continue;
       result.events++;
-      if (await reminderAlreadySent(ins.matrixUserId, ev.uid, ev.start)) continue;
+      if (await reminderAlreadySent(ins.matrixUserId, ev.uid, ev.start)) {
+        retry?.delete(key);
+        continue;
+      }
 
-      const msg = buildReminderMessage(ev, leadMin);
+      // A retry says how long is really left, not the usual lead.
+      const minutes = retrying
+        ? Math.max(1, Math.round((ev.start.getTime() - now.getTime()) / 60_000))
+        : leadMin;
+      const msg = buildReminderMessage(ev, minutes);
       if (dryRun) {
         console.log(
           `[rappels][DRY_RUN] → ${ins.matrixUserId} @ ${ins.roomIdDM}: ${ev.summary} (${ev.start.toISOString()})`,
@@ -97,7 +132,19 @@ export async function runReminderTick(deps: TickDeps): Promise<TickResult> {
         // Read-only: do not mark, so a real run still fires.
         continue;
       }
-      await send(ins.roomIdDM, msg);
+      try {
+        await send(ins.roomIdDM, msg);
+      } catch (e) {
+        // Not marked, and the other subscribers still get theirs.
+        console.error(
+          `[rappels] ${ins.matrixUserId}: rappel « ${ev.summary} » non envoyé, nouvel essai au prochain passage :`,
+          e,
+        );
+        result.failed++;
+        retry?.set(key, ev.start.getTime());
+        continue;
+      }
+      retry?.delete(key);
       await markReminderSent({
         matrixUserId: ins.matrixUserId,
         eventUid: ev.uid,
