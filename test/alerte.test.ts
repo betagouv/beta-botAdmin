@@ -229,6 +229,8 @@ interface Fake {
   created: Array<Record<string, unknown>>;
   posts: Array<{ roomId: string; markdown: string; mentions: Mentions }>;
   salons: Map<string, string>;
+  // Contents of every m.room.power_levels the launch wrote.
+  powerLevels: Array<Record<string, unknown>>;
 }
 
 function fake(
@@ -245,6 +247,7 @@ function fake(
   const created: Fake["created"] = [];
   const posts: Fake["posts"] = [];
   const salons = new Map<string, string>();
+  const powerLevels: Fake["powerLevels"] = [];
   let limited = opts.rateLimitOnce;
   const client = {
     async createRoom(props: Record<string, unknown>) {
@@ -265,10 +268,13 @@ function fake(
       if (roomId === ANNONCE && type === "m.room.name") return { name: "betagouv-domaine-secu" };
       if (roomId === ANNONCE && type === "m.room.power_levels")
         return { users: { [BOT]: opts.botLevelInAnnounce ?? 50 } };
-      if (type === "m.room.power_levels") return { users: { [BOT]: 100 }, invite: 0 };
+      // What Tchap gives a new room: invitations reserved to moderators.
+      if (type === "m.room.power_levels")
+        return { users: { [BOT]: 100 }, invite: 50, state_default: 100 };
       throw { errcode: "M_NOT_FOUND" };
     },
-    async sendStateEvent() {
+    async sendStateEvent(_roomId: string, _type: string, _key: string, content: Record<string, unknown>) {
+      powerLevels.push(content);
       seq.push("power_levels");
       return "$pl";
     },
@@ -278,6 +284,7 @@ function fake(
     created,
     posts,
     salons,
+    powerLevels,
     deps: {
       client,
       post: async (roomId, markdown, mentions) => {
@@ -313,11 +320,15 @@ test("lancer: a private, encrypted room whose history newcomers can read", async
     state.find((e) => e.type === "m.room.history_visibility")?.content,
     { history_visibility: "shared" },
   );
-  // Bot admin, whoever raised the alert moderator, every member may invite.
+  // Bot admin, whoever raised the alert moderator. Nothing below Tchap's
+  // defaults at create time: it refuses the whole room.
   assert.deepEqual(room["power_level_content_override"], {
     users: { [BOT]: 100, [LANCEUR]: 50 },
-    invite: 0,
   });
+  // Every member may invite, opened once the room exists.
+  assert.equal(f.powerLevels.length, 1);
+  assert.equal(f.powerLevels[0]!["invite"], 0);
+  assert.equal(f.powerLevels[0]!["state_default"], 50);
   assert.equal(f.salons.get("tmp-alerte-securite-metabase-280926"), "!alerte:hs");
 });
 
