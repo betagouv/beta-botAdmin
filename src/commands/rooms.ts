@@ -545,9 +545,13 @@ export function moderatorPowerLevels(
 // event because Synapse rejects a full power-level override at create time.
 // Returns false when the homeserver refused: the caller says so in its reply
 // rather than leaving someone with a room they silently cannot manage.
+// `extra` lands on top, in the same event: Tchap refuses at create time any
+// level below its defaults (`invite` < 50, `state_default` < 100), but not
+// afterwards.
 export async function grantModeratorRights(
   client: Pick<MatrixClient, "getRoomStateEvent" | "sendStateEvent">,
   roomId: string,
+  extra: Record<string, unknown> = {},
 ): Promise<boolean> {
   try {
     const pl = (await client.getRoomStateEvent(
@@ -555,12 +559,10 @@ export async function grantModeratorRights(
       "m.room.power_levels",
       "",
     )) as Record<string, unknown> & { events?: Record<string, number> };
-    await client.sendStateEvent(
-      roomId,
-      "m.room.power_levels",
-      "",
-      moderatorPowerLevels(pl),
-    );
+    await client.sendStateEvent(roomId, "m.room.power_levels", "", {
+      ...moderatorPowerLevels(pl),
+      ...extra,
+    });
     return true;
   } catch (err) {
     console.error(`[rooms] power levels not applied on ${roomId}:`, err);

@@ -631,14 +631,14 @@ export async function lancerAlerteSecu(d: AlerteDeps): Promise<AlerteResult> {
       preset: "private_chat",
       visibility: "private",
       // The bot stays admin (100) and whoever raised the alert becomes
-      // moderator (50). `invite: 0` lets every member invite: the procedure
-      // asks it for the référents, who relay the alert to their teams.
+      // moderator (50). Opening invitations to everyone comes right after:
+      // Tchap answers « Invalid power levels content override » to an
+      // `invite` below 50 at create time.
       power_level_content_override: {
         users: {
           [d.botUserId]: 100,
           ...(d.lanceur !== d.botUserId ? { [d.lanceur]: 50 } : {}),
         },
-        invite: 0,
       },
       initial_state: [
         {
@@ -666,9 +666,11 @@ export async function lancerAlerteSecu(d: AlerteDeps): Promise<AlerteResult> {
   d.salons.add(roomId, nom);
 
   const avertissements: string[] = [];
-  if (!(await grantModeratorRights(d.client, roomId))) {
+  // `invite: 0` lets every member invite: the procedure asks it for the
+  // référents, who relay the alert to their teams.
+  if (!(await grantModeratorRights(d.client, roomId, { invite: 0 }))) {
     avertissements.push(
-      "les droits du salon n'ont pas pu être ajustés : certains réglages y restent réservés au bot.",
+      "les droits du salon n'ont pas pu être ajustés : seuls les modérateurs peuvent y inviter, et certains réglages restent réservés au bot.",
     );
   }
   // One invitation at a time, each on its own: a wrong ID in
